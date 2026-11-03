@@ -10,6 +10,7 @@ import {
   type Request,
 } from 'playwright';
 import { DataService } from '../data/service.js';
+import { MockService, type RecentCall } from '../mock/service.js';
 import { bugDraft, type BugInput } from '../report/bug.js';
 import { writeBugReport, type WrittenReport } from '../report/render.js';
 import type {
@@ -31,6 +32,9 @@ const PANEL_SCRIPT = readFileSync(join(here, '..', 'injected', 'panel.js'), 'utf
 const SCREENSHOT_STYLE = 'qa-recorder-panel { display: none !important; }';
 /** A tagged value must show up as an action within this time to get its tag. */
 const TAG_WINDOW_MS = 5_000;
+/** Recent API calls kept in full (headers and body) for "Mock this". */
+const RECENT_CALLS = 40;
+const MAX_RECENT_BODY = 200_000;
 
 const MAX_REQUEST_BODY = 4_000;
 const MAX_RESPONSE_BODY = 10_000;
@@ -84,6 +88,8 @@ export class Recorder {
 
   /** Test data generator, profiles and looper behind the in-page panel. */
   data!: DataService;
+  /** API mock rules and interception. */
+  mocks!: MockService;
 
   private readonly options: Required<Omit<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed'>> &
     Pick<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed'>;
@@ -105,6 +111,8 @@ export class Recorder {
   private userAgent?: string;
   /** seq of the last bug report, so the next one can start after it. */
   private lastBugSeq = 0;
+  private recent: RecentCall[] = [];
+  private mockBroadcastTimer?: NodeJS.Timeout;
 
   constructor(options: RecorderOptions = {}) {
     this.options = {
@@ -117,6 +125,7 @@ export class Recorder {
       headless: false,
       panel: true,
       profilesPath: join('.qa-recorder', 'profiles.json'),
+      mocksPath: join('.qa-recorder', 'mocks.json'),
       ...options,
     };
     this.sessionDir = resolve(this.options.outDir, timestampFolder(this.startedAt));
@@ -148,7 +157,15 @@ export class Recorder {
         ),
       );
     });
+    this.mocks = new MockService(this.context, resolve(this.options.mocksPath), {
+      apiResourceTypes: this.options.apiResourceTypes,
+      recentCalls: () => [...this.recent].reverse(),
+      broadcast: (state) => this.broadcast('mocksChanged', state),
+      log: (message) => this.push({ type: 'console', pageId: 0, level: 'warning', text: `[qa-recorder] ${message}` }),
+    });
+    await this.mocks.start();
     await this.context.exposeBinding('__qaPanel', (source, command: { cmd: string; [key: string]: unknown }) => {
+      if (command?.cmd?.startsWith('mock')) return this.mocks.handle(command);
       if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug') return this.handleBugCommand(source.page, command);
       return this.data.handle(source.page, command);
     });
@@ -234,6 +251,21 @@ export class Recorder {
     return written;
   }
 
+  /** Calls a method on the panel in every open tab. */
+  private broadcast(method: string, payload: unknown): void {
+    for (const page of this.context.pages()) {
+      void page.mainFrame()
+        .evaluate(
+          ([m, p]) => {
+            const ui = (window as unknown as { __qaPanelUi?: Record<string, (x: unknown) => void> }).__qaPanelUi;
+            ui?.[m]?.(p);
+          },
+          [method, payload] as const,
+        )
+        .catch(() => undefined);
+    }
+  }
+
   private async handleBugCommand(page: Page, command: { cmd: string; [key: string]: unknown }) {
     try {
       if (command.cmd === 'bugDraft') {
@@ -255,6 +287,7 @@ export class Recorder {
 
   private async doStop(): Promise<SessionData> {
     for (const timer of this.screenshotTimers.values()) clearTimeout(timer);
+    if (this.mockBroadcastTimer) clearTimeout(this.mockBroadcastTimer);
     this.screenshotTimers.clear();
     await this.settle();
     const data = this.snapshot();
@@ -494,8 +527,9 @@ export class Recorder {
     let responseBody: string | undefined;
     if (isError && response) responseBody = truncate(await response.text().catch(() => undefined), MAX_RESPONSE_BODY);
     const sizes = await request.sizes().catch(() => undefined);
+    const mock = this.mocks?.appliedTo(request);
 
-    this.push<NetworkEvent>({
+    const event = this.push<NetworkEvent>({
       ...fields,
       status,
       statusText: response?.statusText(),
@@ -505,19 +539,50 @@ export class Recorder {
       responseBody,
       isError,
       isSlow: durationMs !== undefined && durationMs >= this.options.slowThresholdMs,
+      ...(mock && { mock }),
     });
+    await this.rememberCall(event, request);
+  }
+
+  /** Keeps the last few API calls in full so the QA can turn one into a mock. */
+  private async rememberCall(event: NetworkEvent, request: Request): Promise<void> {
+    const response = await request.response().catch(() => null);
+    const contentType = response ? ((await response.allHeaders().catch(() => ({}))) as Record<string, string>)['content-type'] ?? '' : '';
+    const textual = /json|text|xml|javascript|x-www-form-urlencoded/i.test(contentType) || contentType === '';
+    const body = response && textual ? await response.text().catch(() => undefined) : undefined;
+    this.recent.push({
+      seq: event.seq,
+      method: event.method,
+      url: event.url,
+      status: event.status,
+      requestHeaders: await request.allHeaders().catch(() => undefined),
+      requestBody: request.postData() ?? undefined,
+      responseHeaders: response ? await response.allHeaders().catch(() => undefined) : undefined,
+      responseBody: body !== undefined && body.length <= MAX_RECENT_BODY ? body : undefined,
+      mocked: event.mock?.rule,
+    });
+    if (this.recent.length > RECENT_CALLS) this.recent.shift();
+    // Many calls can finish together; update the panels once.
+    if (!this.mockBroadcastTimer) {
+      this.mockBroadcastTimer = setTimeout(() => {
+        this.mockBroadcastTimer = undefined;
+        if (!this.stopped) this.broadcast('mocksChanged', this.mocks.state());
+      }, 300);
+    }
   }
 
   private onRequestFailed(request: Request): void {
     if (!this.isApi(request)) return;
     this.settleRequest(request);
     const { started, fields } = this.baseNetwork(request);
+    const mock = this.mocks?.appliedTo(request);
     this.push<NetworkEvent>({
       ...fields,
       durationMs: started ? Date.now() - started.start : undefined,
       failure: request.failure()?.errorText ?? 'failed',
       isError: true,
       isSlow: false,
+      ...(mock && { mock }),
     });
   }
 

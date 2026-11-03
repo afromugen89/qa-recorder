@@ -98,6 +98,8 @@ export interface NetworkEvent extends BaseEvent {
   failure?: string;
   isError: boolean;
   isSlow: boolean;
+  /** Set when a mock rule changed this call. */
+  mock?: { ruleId: string; rule: string; mode: 'request-only' | 'modify' | 'replace' | 'fail'; changes: string[] };
   /** seq of the user action that most likely triggered this call. */
   triggeredBy?: number;
 }
@@ -196,6 +198,8 @@ export interface RecorderOptions {
   panel?: boolean;
   /** Where data profiles are stored. Default ./.qa-recorder/profiles.json */
   profilesPath?: string;
+  /** Where API mock rules are stored. Default ./.qa-recorder/mocks.json */
+  mocksPath?: string;
   /** Faker seed, to reproduce generated data. Random by default. */
   seed?: number;
   /** Called for each event as it is recorded. */

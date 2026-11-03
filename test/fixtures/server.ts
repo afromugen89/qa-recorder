@@ -45,6 +45,15 @@ function handler(crossOrigin: () => string) {
         res.writeHead(500, { 'content-type': 'application/json', ...cors });
         res.end(JSON.stringify({ error: 'Database timeout' }));
         return;
+      case '/api/echo': {
+        let body = '';
+        req.on('data', (chunk) => (body += chunk));
+        req.on('end', () => {
+          res.writeHead(200, { 'content-type': 'application/json', 'x-server': 'demo', ...cors });
+          res.end(JSON.stringify({ method: req.method, headers: req.headers, body, items: [{ id: 1, price: 10 }], total: 1 }));
+        });
+        return;
+      }
       case '/api/slow':
         setTimeout(() => {
           res.writeHead(200, { 'content-type': 'application/json', ...cors });

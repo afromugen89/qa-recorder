@@ -32,6 +32,7 @@ Record options:
   --executable <path>    Use this Chromium or Chrome binary
   --no-panel             Hide the in-page test data panel (Alt+Shift+D)
   --profiles <file>      Data profiles file (default: .qa-recorder/profiles.json)
+  --mocks <file>         API mock rules file (default: .qa-recorder/mocks.json)
   --seed <n>             Faker seed, to reproduce generated data
   -h, --help             Show this help
 
@@ -76,12 +77,13 @@ function format(event: TimelineEvent): string | undefined {
       return `${time} ${green(event.action.padEnd(8))} ${event.locator.code}${detail}${frame}${data}${loop}`;
     }
     case 'network': {
+      const mocked = event.mock ? ` ${color(33)(`[mocked: ${event.mock.rule}]`)}` : '';
       if (!event.isError && !event.isSlow) {
-        return `${time} ${dim(`${event.method} ${event.status ?? ''} ${event.durationMs ?? '?'}ms ${event.url}`)}`;
+        return `${time} ${dim(`${event.method} ${event.status ?? ''} ${event.durationMs ?? '?'}ms ${event.url}`)}${mocked}`;
       }
       const tag = event.isError ? red('API ERR ') : yellow('API SLOW');
       const status = event.failure ?? `${event.status} ${event.statusText ?? ''}`.trim();
-      return `${time} ${tag} ${event.method} ${event.url} → ${status} in ${event.durationMs ?? '?'}ms`;
+      return `${time} ${tag} ${event.method} ${event.url} → ${status} in ${event.durationMs ?? '?'}ms${mocked}`;
     }
     case 'console':
       return `${time} ${event.level === 'error' ? red('CONSOLE ') : yellow('WARNING ')} ${event.text}`;
@@ -111,6 +113,7 @@ async function record(argv: string[]): Promise<void> {
       executable: { type: 'string' },
       'no-panel': { type: 'boolean', default: false },
       profiles: { type: 'string' },
+      mocks: { type: 'string' },
       seed: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
@@ -137,6 +140,7 @@ async function record(argv: string[]): Promise<void> {
     executablePath: values.executable,
     panel: !values['no-panel'],
     ...(values.profiles && { profilesPath: values.profiles }),
+    ...(values.mocks && { mocksPath: values.mocks }),
     ...(values.seed !== undefined && { seed: Number(values.seed) }),
     onEvent: (event) => {
       const line = format(event);
@@ -145,6 +149,8 @@ async function record(argv: string[]): Promise<void> {
   });
 
   console.log(`Test data panel: press Alt+Shift+D in the page, or click "Test data" (seed ${recorder.data.generator.seed}).`);
+  const activeMocks = recorder.mocks.activeCount();
+  if (activeMocks) console.log(color(33)(`${activeMocks} API mock${activeMocks > 1 ? 's are' : ' is'} on (from ${relative(process.cwd(), recorder.mocks.state().path)}).`));
   console.log(`Recording. Close the browser or press Ctrl+C to stop.\nSaving to ${relative(process.cwd(), recorder.sessionDir) || '.'}\n`);
 
   let stopping = false;

@@ -48,6 +48,8 @@ export interface ReportApiCall {
   failure?: string;
   requestBody?: string;
   responseBody?: string;
+  /** Name of the mock rule that changed this call, if any. */
+  mock?: string;
 }
 
 export interface EndpointStats {
@@ -83,6 +85,8 @@ export interface BugReport {
   pageErrors: { step?: number; message: string; stack?: string }[];
   apiPerformance: EndpointStats[];
   slowThresholdMs: number;
+  /** Mock rules that changed API calls in this report's range. */
+  mocks: { rule: string; calls: number; changes: string[] }[];
   screenshot?: string;
   /** Every event in range, for the full timeline appendix. */
   timeline: TimelineEvent[];
@@ -359,6 +363,7 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     failure: c.failure,
     requestBody: c.requestBody,
     responseBody: c.responseBody,
+    ...(c.mock && { mock: c.mock.rule }),
   });
   const failedApiCalls = network.filter((c) => c.isError).map(toCall);
   const slowApiCalls = network.filter((c) => c.isSlow && !c.isError).map(toCall);
@@ -406,9 +411,22 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     pageErrors,
     apiPerformance: apiPerformance(network),
     slowThresholdMs: session.meta.slowThresholdMs,
+    mocks: summarizeMocks(network),
     screenshot: input.screenshot,
     timeline: events,
   };
+}
+
+function summarizeMocks(network: NetworkEvent[]): BugReport['mocks'] {
+  const byRule = new Map<string, { rule: string; calls: number; changes: Set<string> }>();
+  for (const c of network) {
+    if (!c.mock) continue;
+    const entry = byRule.get(c.mock.ruleId) ?? { rule: c.mock.rule, calls: 0, changes: new Set<string>() };
+    entry.calls++;
+    for (const change of c.mock.changes) entry.changes.add(change);
+    byRule.set(c.mock.ruleId, entry);
+  }
+  return [...byRule.values()].map((m) => ({ rule: m.rule, calls: m.calls, changes: [...m.changes] }));
 }
 
 /** Draft values for the panel's bug form. */
@@ -423,5 +441,6 @@ export function bugDraft(session: SessionData, fromSeq = 0) {
     slowApiCalls: report.slowApiCalls.length,
     consoleErrors: report.consoleErrors.filter((e) => e.level === 'error').length,
     pageErrors: report.pageErrors.length,
+    mockedCalls: report.mocks.reduce((sum, m) => sum + m.calls, 0),
   };
 }
