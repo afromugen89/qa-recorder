@@ -7,7 +7,11 @@ import {
   dateBoundaries, edgeCases, lengthBoundaries, lengthPartitions, numberBoundaries, numberPartitions,
   type TestValue,
 } from './data/boundaries.js';
-import { techniqueName } from './data/techniques.js';
+import { ISTQB_TECHNIQUES, techniqueName, type TechniqueId } from './data/techniques.js';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
+import { writeBugReport } from './report/render.js';
+import type { SessionData } from './recorder/types.js';
 import type { TimelineEvent } from './recorder/types.js';
 
 const HELP = `qa-recorder: a recording browser for QA
@@ -15,6 +19,7 @@ const HELP = `qa-recorder: a recording browser for QA
 Usage:
   qa-recorder record [url] [options]
   qa-recorder data <command> [options]     Generate test data in the terminal
+  qa-recorder report <session-folder> [options]   Write a bug report from a recording
 
 Record options:
   -o, --out <dir>        Folder for recordings (default: ./recordings)
@@ -29,6 +34,12 @@ Record options:
   --profiles <file>      Data profiles file (default: .qa-recorder/profiles.json)
   --seed <n>             Faker seed, to reproduce generated data
   -h, --help             Show this help
+
+Report options:
+  --title <text>  --expected <text>  --actual <text>  --notes <text>
+  --severity critical|major|minor|trivial  --priority high|medium|low
+  --technique bva,ep,dt,st,eg,exploratory,checklist,use-case,random
+  --reporter <name>  --from-seq <n>  --to-seq <n>
 
 Data commands:
   data types                               List Faker data types
@@ -78,6 +89,8 @@ function format(event: TimelineEvent): string | undefined {
       return `${time} ${red('JS ERROR')} ${event.message}`;
     case 'navigation':
       return `${time} ${dim(`${event.newPage ? 'new tab' : 'navigate'} ${event.url}`)}`;
+    case 'bug':
+      return `${time} ${color(35)('BUG     ')} ${event.title} → ${event.reportDir}/report.html`;
     case 'loop':
       return `${time} ${color(36)('LOOP    ')} ${event.phase}${event.iteration ? ` ${event.iteration}/${event.total}` : ''}${event.error ? ` ${red(event.error)}` : ''}`;
   }
@@ -146,6 +159,11 @@ async function record(argv: string[]): Promise<void> {
         `${s.avgApiDurationMs !== undefined ? `, avg ${s.avgApiDurationMs}ms` : ''}), ` +
         `${s.consoleErrors} console errors, ${s.pageErrors} uncaught JS errors`,
     );
+    const bugs = data.events.filter((e) => e.type === 'bug').length;
+    if (bugs) console.log(`${bugs} bug report${bugs > 1 ? 's' : ''} in ${relative(process.cwd(), recorder.sessionDir)}/bugs/`);
+    else if (s.failedApiCalls || s.consoleErrors || s.pageErrors) {
+      console.log(`To write a bug report: qa-recorder report ${relative(process.cwd(), recorder.sessionDir)}`);
+    }
   };
   process.once('SIGINT', () => void finish().then(() => process.exit(0)));
   await recorder.waitForClose();
@@ -239,6 +257,70 @@ function data(argv: string[]): void {
   }
 }
 
+const TECHNIQUE_ALIASES: Record<string, TechniqueId> = {
+  bva: 'boundary-value-analysis',
+  ep: 'equivalence-partitioning',
+  dt: 'decision-table-testing',
+  st: 'state-transition-testing',
+  eg: 'error-guessing',
+  exploratory: 'exploratory-testing',
+  checklist: 'checklist-based-testing',
+  'use-case': 'use-case-testing',
+  random: 'random-testing',
+};
+
+function report(argv: string[]): void {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      title: { type: 'string' },
+      expected: { type: 'string' },
+      actual: { type: 'string' },
+      notes: { type: 'string' },
+      severity: { type: 'string' },
+      priority: { type: 'string' },
+      technique: { type: 'string' },
+      reporter: { type: 'string' },
+      'from-seq': { type: 'string' },
+      'to-seq': { type: 'string' },
+    },
+  });
+  const dir = positionals[0];
+  if (!dir) throw new Error('Give the session folder, e.g. qa-recorder report recordings/2026-11-03_14-05-12');
+  const file = join(dir, 'session.json');
+  if (!existsSync(file)) throw new Error(`No session.json in ${dir}`);
+  const session = JSON.parse(readFileSync(file, 'utf8')) as SessionData;
+  const techniques = values.technique?.split(',').map((t) => {
+    const id = (TECHNIQUE_ALIASES[t.trim()] ?? t.trim()) as TechniqueId;
+    if (!(id in ISTQB_TECHNIQUES)) throw new Error(`Unknown technique "${t}". Use: ${Object.keys(TECHNIQUE_ALIASES).join(', ')}`);
+    return id;
+  });
+  const severities = ['critical', 'major', 'minor', 'trivial'];
+  const priorities = ['high', 'medium', 'low'];
+  if (values.severity && !severities.includes(values.severity)) throw new Error(`--severity must be one of ${severities.join(', ')}`);
+  if (values.priority && !priorities.includes(values.priority)) throw new Error(`--priority must be one of ${priorities.join(', ')}`);
+  const written = writeBugReport(dir, session, {
+    title: values.title,
+    expected: values.expected,
+    actual: values.actual,
+    notes: values.notes,
+    severity: values.severity as never,
+    priority: values.priority as never,
+    techniques,
+    reporter: values.reporter,
+    fromSeq: values['from-seq'] ? Number(values['from-seq']) : undefined,
+    toSeq: values['to-seq'] ? Number(values['to-seq']) : undefined,
+  });
+  const r = written.report;
+  console.log(`${green('Bug report:')} ${r.title}`);
+  console.log(`  ${r.steps.length} steps, ${r.failedApiCalls.length} failed API calls, ${r.slowApiCalls.length} slow, ` +
+    `${r.consoleErrors.length} console messages, ${r.pageErrors.length} JS errors`);
+  console.log(`  Technique: ${r.techniques.map((t) => t.name).join(', ')}`);
+  console.log(`  ${relative(process.cwd(), written.html)}`);
+  console.log(`  ${relative(process.cwd(), written.markdown)}  (paste into Jira)`);
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   if (!command || command === '-h' || command === '--help') {
@@ -247,6 +329,7 @@ async function main(): Promise<void> {
   }
   if (command === 'record') return record(rest);
   if (command === 'data') return data(rest);
+  if (command === 'report') return report(rest);
   // Allow `qa-recorder https://example.com` as a shortcut.
   if (/^(https?:|[\w-]+\.)/.test(command)) return record([command, ...rest]);
   console.error(`Unknown command "${command}".\n\n${HELP}`);

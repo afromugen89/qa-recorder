@@ -135,7 +135,15 @@ export interface LoopEvent extends BaseEvent {
   error?: string;
 }
 
-export type TimelineEvent = ActionEvent | NetworkEvent | ConsoleEvent | PageErrorEvent | NavigationEvent | LoopEvent;
+/** A bug report was created at this point. */
+export interface BugEvent extends BaseEvent {
+  type: 'bug';
+  title: string;
+  /** Report folder, relative to the session folder. */
+  reportDir: string;
+}
+
+export type TimelineEvent = ActionEvent | NetworkEvent | ConsoleEvent | PageErrorEvent | NavigationEvent | LoopEvent | BugEvent;
 
 export interface SessionSummary {
   actions: number;
