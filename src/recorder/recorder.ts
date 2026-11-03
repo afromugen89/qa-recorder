@@ -1,0 +1,447 @@
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import {
+  chromium,
+  type Browser,
+  type BrowserContext,
+  type Frame,
+  type Page,
+  type Request,
+} from 'playwright';
+import type {
+  ActionEvent,
+  NetworkEvent,
+  RecorderOptions,
+  SessionData,
+  SessionSummary,
+  TimelineEvent,
+} from './types.js';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const INJECTED_SCRIPT = readFileSync(join(here, '..', 'injected', 'recorder.js'), 'utf8');
+
+const MAX_REQUEST_BODY = 4_000;
+const MAX_RESPONSE_BODY = 10_000;
+/** A network call within this window after an action is attributed to it. */
+const TRIGGER_WINDOW_MS = 3_000;
+const SCREENSHOT_DELAY_MS = 400;
+const SAVE_DEBOUNCE_MS = 1_000;
+const MASK = '********';
+
+type EventInput<T extends TimelineEvent> = T extends TimelineEvent
+  ? Omit<T, 'seq' | 'timestamp' | 'elapsedMs'> & { timestamp?: number }
+  : never;
+
+interface RawAction {
+  kind: ActionEvent['action'];
+  locator: ActionEvent['locator'];
+  element: ActionEvent['element'];
+  url: string;
+  timestamp: number;
+  value?: string;
+  sensitive?: boolean;
+  values?: string[];
+  labels?: string[];
+  key?: string;
+  files?: string[];
+  button?: ActionEvent['button'];
+  modifiers?: string[];
+}
+
+function timestampFolder(date: Date): string {
+  return date.toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
+}
+
+function truncate(text: string | null | undefined, max: number): string | undefined {
+  if (text == null) return undefined;
+  return text.length > max ? `${text.slice(0, max)}… [${text.length - max} more chars]` : text;
+}
+
+/**
+ * Records one browsing session: user actions, API calls, console output and
+ * navigation, as one ordered timeline written to `<outDir>/<timestamp>/session.json`.
+ */
+export class Recorder {
+  readonly sessionDir: string;
+  readonly events: TimelineEvent[] = [];
+
+  browser!: Browser;
+  context!: BrowserContext;
+  /** The first tab. */
+  page!: Page;
+
+  private readonly options: Required<Omit<RecorderOptions, 'url' | 'executablePath' | 'onEvent'>> &
+    Pick<RecorderOptions, 'url' | 'executablePath' | 'onEvent'>;
+  private readonly startedAt = new Date();
+  private seq = 0;
+  private pageIds = new WeakMap<Page, number>();
+  private nextPageId = 1;
+  private requestStarts = new WeakMap<Request, { start: number; triggeredBy?: number }>();
+  private actionFrames = new WeakMap<ActionEvent, Frame>();
+  private screenshotTimers = new Map<Page, NodeJS.Timeout>();
+  private saveTimer?: NodeJS.Timeout;
+  private pending = new Set<Promise<unknown>>();
+  private stopped?: Promise<SessionData>;
+  private closedListeners: Array<() => void> = [];
+
+  constructor(options: RecorderOptions = {}) {
+    this.options = {
+      outDir: 'recordings',
+      slowThresholdMs: 1_000,
+      screenshots: true,
+      keepSecrets: false,
+      captureWarnings: true,
+      apiResourceTypes: ['xhr', 'fetch'],
+      headless: false,
+      ...options,
+    };
+    this.sessionDir = resolve(this.options.outDir, timestampFolder(this.startedAt));
+  }
+
+  /** Launch the browser and start recording. */
+  async start(): Promise<this> {
+    mkdirSync(join(this.sessionDir, 'screenshots'), { recursive: true });
+
+    this.browser = await chromium.launch({
+      headless: this.options.headless,
+      executablePath: this.options.executablePath,
+    });
+    this.context = await this.browser.newContext({
+      viewport: this.options.headless ? { width: 1280, height: 800 } : null,
+      recordHar: { path: join(this.sessionDir, 'network.har'), content: 'embed' },
+    });
+
+    await this.context.exposeBinding('__qaRecord', (source, payload: RawAction) => {
+      this.onAction(source.page, source.frame, payload);
+    });
+    await this.context.addInitScript({ content: INJECTED_SCRIPT });
+
+    this.context.on('page', (page) => this.attachPage(page, true));
+    this.context.on('request', (request) => this.onRequest(request));
+    this.context.on('requestfinished', (request) => this.track(this.onRequestFinished(request)));
+    this.context.on('requestfailed', (request) => this.onRequestFailed(request));
+    this.browser.on('disconnected', () => this.closedListeners.forEach((fn) => fn()));
+
+    this.page = await this.context.newPage();
+    if (this.options.url) {
+      await this.page.goto(this.options.url).catch((error: Error) => {
+        // Keep recording even if the first page fails to load; the failure is itself useful.
+        this.push({ type: 'pageerror', pageId: 1, message: `Failed to open ${this.options.url}: ${error.message}` });
+      });
+    }
+    return this;
+  }
+
+  /** Resolves when the user closes every tab or the browser. */
+  waitForClose(): Promise<void> {
+    return new Promise((resolveClose) => {
+      const check = () => {
+        if (!this.browser.isConnected() || this.context.pages().length === 0) resolveClose();
+      };
+      this.closedListeners.push(resolveClose);
+      this.context.on('close', () => resolveClose());
+      this.context.on('page', (page) => page.on('close', check));
+      this.page.on('close', check);
+    });
+  }
+
+  /** Stop recording, flush the HAR file and session.json, and close the browser. */
+  stop(): Promise<SessionData> {
+    this.stopped ??= this.doStop();
+    return this.stopped;
+  }
+
+  /** Session data as recorded so far. */
+  snapshot(): SessionData {
+    return {
+      version: 1,
+      meta: {
+        startUrl: this.options.url,
+        startedAt: this.startedAt.toISOString(),
+        browser: `chromium ${this.browser?.version() ?? ''}`.trim(),
+        slowThresholdMs: this.options.slowThresholdMs,
+      },
+      summary: this.summarize(),
+      events: [...this.events].sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq),
+    };
+  }
+
+  // ---------- internals ----------
+
+  private async doStop(): Promise<SessionData> {
+    for (const timer of this.screenshotTimers.values()) clearTimeout(timer);
+    this.screenshotTimers.clear();
+    await this.settle();
+    const data = this.snapshot();
+    data.meta.endedAt = new Date().toISOString();
+    try {
+      data.meta.userAgent = await this.page.evaluate(() => navigator.userAgent);
+    } catch {
+      /* page already closed */
+    }
+    if (this.saveTimer) clearTimeout(this.saveTimer);
+    // Closing the context writes the HAR file.
+    await this.context.close().catch(() => undefined);
+    await this.browser.close().catch(() => undefined);
+    writeFileSync(join(this.sessionDir, 'session.json'), JSON.stringify(data, null, 2));
+    return data;
+  }
+
+  private async settle(): Promise<void> {
+    while (this.pending.size) await Promise.allSettled([...this.pending]);
+  }
+
+  private track<T>(promise: Promise<T>): void {
+    const tracked = promise.catch(() => undefined).finally(() => this.pending.delete(tracked));
+    this.pending.add(tracked);
+  }
+
+  private pageId(page: Page | null | undefined): number {
+    if (!page) return 0;
+    let id = this.pageIds.get(page);
+    if (!id) {
+      id = this.nextPageId++;
+      this.pageIds.set(page, id);
+    }
+    return id;
+  }
+
+  private push<T extends TimelineEvent>(input: EventInput<T>): T {
+    const timestamp = input.timestamp ?? Date.now();
+    const event = {
+      ...input,
+      seq: ++this.seq,
+      timestamp,
+      elapsedMs: timestamp - this.startedAt.getTime(),
+    } as unknown as T;
+    this.events.push(event);
+    this.options.onEvent?.(event);
+    this.scheduleSave();
+    return event;
+  }
+
+  private scheduleSave(): void {
+    if (this.stopped || this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = undefined;
+      if (this.stopped) return;
+      try {
+        writeFileSync(join(this.sessionDir, 'session.json'), JSON.stringify(this.snapshot(), null, 2));
+      } catch {
+        /* best effort; the final save happens on stop */
+      }
+    }, SAVE_DEBOUNCE_MS);
+  }
+
+  private attachPage(page: Page, isNew: boolean): void {
+    const pageId = this.pageId(page);
+    if (isNew && pageId > 1) {
+      this.push({ type: 'navigation', pageId, url: page.url(), newPage: true });
+    }
+    page.on('framenavigated', (frame) => {
+      if (frame === page.mainFrame()) this.push({ type: 'navigation', pageId, url: frame.url() });
+    });
+    page.on('console', (message) => {
+      const type = message.type();
+      if (type !== 'error' && !(type === 'warning' && this.options.captureWarnings)) return;
+      const loc = message.location();
+      this.push({
+        type: 'console',
+        pageId,
+        level: type === 'error' ? 'error' : 'warning',
+        text: message.text(),
+        location: loc.url ? `${loc.url}:${loc.lineNumber + 1}:${loc.columnNumber + 1}` : undefined,
+      });
+    });
+    page.on('pageerror', (error) => {
+      this.push({ type: 'pageerror', pageId, message: error.message, stack: error.stack });
+    });
+  }
+
+  private lastActionBefore(time: number): ActionEvent | undefined {
+    for (let i = this.events.length - 1; i >= 0; i--) {
+      const event = this.events[i];
+      if (event.type !== 'action') continue;
+      if (time - event.timestamp > TRIGGER_WINDOW_MS) return undefined;
+      return event;
+    }
+    return undefined;
+  }
+
+  private onAction(page: Page, frame: Frame, raw: RawAction): void {
+    if (this.stopped) return;
+    const pageId = this.pageId(page);
+    const masked = raw.sensitive && !this.options.keepSecrets;
+    const value = masked && raw.value !== undefined ? MASK : raw.value;
+
+    // Typing fires one input event per keystroke; keep only the final value.
+    const last = this.events[this.events.length - 1];
+    if (
+      raw.kind === 'fill' &&
+      last?.type === 'action' &&
+      last.action === 'fill' &&
+      last.locator.selector === raw.locator.selector &&
+      this.actionFrames.get(last) === frame
+    ) {
+      last.value = value;
+      last.timestamp = raw.timestamp;
+      last.elapsedMs = raw.timestamp - this.startedAt.getTime();
+      this.scheduleSave();
+      this.scheduleScreenshot(page, last);
+      return;
+    }
+
+    const event = this.push<ActionEvent>({
+      type: 'action',
+      pageId,
+      action: raw.kind,
+      locator: raw.locator,
+      framePath: [],
+      element: raw.element,
+      url: raw.url,
+      timestamp: raw.timestamp,
+      ...(value !== undefined && { value }),
+      ...(raw.sensitive && { sensitive: true }),
+      ...(raw.values && { values: raw.values }),
+      ...(raw.labels && { labels: raw.labels }),
+      ...(raw.key && { key: raw.key }),
+      ...(raw.files && { files: raw.files }),
+      ...(raw.button && raw.button !== 'left' && { button: raw.button }),
+      ...(raw.modifiers?.length && { modifiers: raw.modifiers }),
+    });
+    this.actionFrames.set(event, frame);
+    if (frame !== page.mainFrame()) this.track(this.resolveFramePath(frame).then((path) => (event.framePath = path)));
+    this.scheduleScreenshot(page, event);
+  }
+
+  /** Selectors for each iframe element from the top page down to `frame`. */
+  private async resolveFramePath(frame: Frame): Promise<string[]> {
+    const path: string[] = [];
+    for (let current: Frame | null = frame; current?.parentFrame(); current = current.parentFrame()) {
+      const handle = await current.frameElement();
+      const selector = await handle.evaluate((el: Element) => {
+        const recorder = (window as unknown as { __qaRecorder?: { selectorFor(e: Element): { selector: string } } })
+          .__qaRecorder;
+        if (recorder) return recorder.selectorFor(el).selector;
+        return el.id ? `#${el.id}` : 'iframe';
+      });
+      await handle.dispose();
+      path.unshift(selector);
+    }
+    return path;
+  }
+
+  private scheduleScreenshot(page: Page, event: ActionEvent): void {
+    if (!this.options.screenshots) return;
+    const existing = this.screenshotTimers.get(page);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      this.screenshotTimers.delete(page);
+      if (this.stopped || page.isClosed()) return;
+      const file = `screenshots/${String(event.seq).padStart(4, '0')}-${event.action}.png`;
+      this.track(
+        page.screenshot({ path: join(this.sessionDir, file) }).then(() => {
+          event.screenshot = file;
+          this.scheduleSave();
+        }),
+      );
+    }, SCREENSHOT_DELAY_MS);
+    this.screenshotTimers.set(page, timer);
+  }
+
+  private isApi(request: Request): boolean {
+    return this.options.apiResourceTypes.includes(request.resourceType());
+  }
+
+  private onRequest(request: Request): void {
+    if (!this.isApi(request)) return;
+    const start = Date.now();
+    this.requestStarts.set(request, { start, triggeredBy: this.lastActionBefore(start)?.seq });
+  }
+
+  private baseNetwork(request: Request) {
+    const started = this.requestStarts.get(request);
+    let pageId = 0;
+    try {
+      pageId = this.pageId(request.frame().page());
+    } catch {
+      /* service worker requests have no frame */
+    }
+    return {
+      started,
+      fields: {
+        type: 'network' as const,
+        pageId,
+        method: request.method(),
+        url: request.url(),
+        resourceType: request.resourceType(),
+        requestBody: truncate(request.postData(), MAX_REQUEST_BODY),
+        ...(started?.triggeredBy !== undefined && { triggeredBy: started.triggeredBy }),
+        timestamp: started?.start,
+      },
+    };
+  }
+
+  private async onRequestFinished(request: Request): Promise<void> {
+    if (!this.isApi(request)) return;
+    const { started, fields } = this.baseNetwork(request);
+    const response = await request.response();
+    const timing = request.timing();
+    const durationMs =
+      timing.responseEnd >= 0 ? Math.round(timing.responseEnd) : started ? Date.now() - started.start : undefined;
+    const ttfbMs = timing.responseStart >= 0 ? Math.round(timing.responseStart) : undefined;
+    const status = response?.status();
+    const isError = status !== undefined && status >= 400;
+
+    let responseBody: string | undefined;
+    if (isError && response) responseBody = truncate(await response.text().catch(() => undefined), MAX_RESPONSE_BODY);
+    const sizes = await request.sizes().catch(() => undefined);
+
+    this.push<NetworkEvent>({
+      ...fields,
+      status,
+      statusText: response?.statusText(),
+      durationMs,
+      ttfbMs,
+      responseSize: sizes?.responseBodySize,
+      responseBody,
+      isError,
+      isSlow: durationMs !== undefined && durationMs >= this.options.slowThresholdMs,
+    });
+  }
+
+  private onRequestFailed(request: Request): void {
+    if (!this.isApi(request)) return;
+    const { started, fields } = this.baseNetwork(request);
+    this.push<NetworkEvent>({
+      ...fields,
+      durationMs: started ? Date.now() - started.start : undefined,
+      failure: request.failure()?.errorText ?? 'failed',
+      isError: true,
+      isSlow: false,
+    });
+  }
+
+  private summarize(): SessionSummary {
+    const network = this.events.filter((e): e is NetworkEvent => e.type === 'network');
+    const timed = network.filter((e) => e.durationMs !== undefined);
+    return {
+      actions: this.events.filter((e) => e.type === 'action').length,
+      apiCalls: network.length,
+      failedApiCalls: network.filter((e) => e.isError).length,
+      slowApiCalls: network.filter((e) => e.isSlow).length,
+      consoleErrors: this.events.filter((e) => e.type === 'console' && e.level === 'error').length,
+      consoleWarnings: this.events.filter((e) => e.type === 'console' && e.level === 'warning').length,
+      pageErrors: this.events.filter((e) => e.type === 'pageerror').length,
+      avgApiDurationMs: timed.length
+        ? Math.round(timed.reduce((sum, e) => sum + (e.durationMs ?? 0), 0) / timed.length)
+        : undefined,
+    };
+  }
+}
+
+/** Launch a recording browser. Call `stop()` on the result to finish and save the session. */
+export async function startRecording(options: RecorderOptions = {}): Promise<Recorder> {
+  return new Recorder(options).start();
+}

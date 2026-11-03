@@ -1,0 +1,29 @@
+{
+  "name": "qa-recorder",
+  "version": "0.1.0",
+  "description": "Recording browser for QA: captures user actions, API calls and console errors for bug reports and Playwright tests.",
+  "type": "module",
+  "bin": {
+    "qa-recorder": "dist/cli.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-assets.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "record": "tsx src/cli.ts record",
+    "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
+    "setup": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
