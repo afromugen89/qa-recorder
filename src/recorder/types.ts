@@ -1,3 +1,6 @@
+import type { GeneratorSpec } from '../data/faker.js';
+import type { TechniqueId } from '../data/techniques.js';
+
 export type ActionKind =
   | 'click'
   | 'dblclick'
@@ -41,6 +44,18 @@ interface BaseEvent {
   pageId: number;
 }
 
+/** Where a value typed by the tool came from, and which ISTQB technique it applies. */
+export interface TestDataTag {
+  source: 'faker' | 'boundary' | 'partition' | 'edge-case' | 'profile' | 'loop' | 'manual';
+  technique?: TechniqueId;
+  /** e.g. "max + 1 (51 chars)" or "Email". */
+  label: string;
+  /** What a correct implementation should do with the value. */
+  expected?: 'valid' | 'invalid';
+  /** The generator, so the value can be regenerated (looper, profiles). */
+  spec?: GeneratorSpec;
+}
+
 export interface ActionEvent extends BaseEvent {
   type: 'action';
   action: ActionKind;
@@ -59,6 +74,10 @@ export interface ActionEvent extends BaseEvent {
   modifiers?: string[];
   /** Screenshot taken just after the action, relative to the session folder. */
   screenshot?: string;
+  /** Set when the value came from the test data panel, a profile or the looper. */
+  testData?: TestDataTag;
+  /** Set when the action was replayed by the looper. */
+  loop?: { runId: number; iteration: number };
 }
 
 export interface NetworkEvent extends BaseEvent {
@@ -103,7 +122,20 @@ export interface NavigationEvent extends BaseEvent {
   newPage?: boolean;
 }
 
-export type TimelineEvent = ActionEvent | NetworkEvent | ConsoleEvent | PageErrorEvent | NavigationEvent;
+/** Looper milestones: capturing a flow and each replayed iteration. */
+export interface LoopEvent extends BaseEvent {
+  type: 'loop';
+  phase: 'capture-start' | 'capture-end' | 'run-start' | 'iteration' | 'run-end';
+  runId?: number;
+  iteration?: number;
+  total?: number;
+  steps?: number;
+  passed?: number;
+  stopped?: boolean;
+  error?: string;
+}
+
+export type TimelineEvent = ActionEvent | NetworkEvent | ConsoleEvent | PageErrorEvent | NavigationEvent | LoopEvent;
 
 export interface SessionSummary {
   actions: number;
@@ -126,6 +158,8 @@ export interface SessionData {
     browser: string;
     userAgent?: string;
     slowThresholdMs: number;
+    /** Faker seed; the same seed reproduces the same generated data. */
+    dataSeed?: number;
   };
   summary: SessionSummary;
   events: TimelineEvent[];
@@ -150,6 +184,12 @@ export interface RecorderOptions {
   headless?: boolean;
   /** Path to a Chromium binary, if not using Playwright's bundled one. */
   executablePath?: string;
+  /** Show the test data panel in the page. Default true. */
+  panel?: boolean;
+  /** Where data profiles are stored. Default ./.qa-recorder/profiles.json */
+  profilesPath?: string;
+  /** Faker seed, to reproduce generated data. Random by default. */
+  seed?: number;
   /** Called for each event as it is recorded. */
   onEvent?: (event: TimelineEvent) => void;
 }
