@@ -20,6 +20,9 @@
     capture: { state: 'idle' },
     loop: { iterations: 5, delayMs: 500, reload: false, values: {} },
     loopStatus: null,
+    bug: null,
+    bugForm: { scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', actual: '', notes: '', techniques: [] },
+    lastBug: null,
     message: null,
     busy: false,
   };
@@ -432,21 +435,86 @@
         h('button', { class: 'b', disabled: state.busy || running, onclick: () => run(async () => { state.capture = await call('captureCancel'); state.loopStatus = null; }) }, 'New capture')));
   }
 
+  async function loadBugDraft() {
+    const draft = await call('bugDraft', { scope: state.bugForm.scope });
+    state.bug = draft;
+    state.bugForm.title = draft.title;
+    state.bugForm.actual = draft.actual;
+    state.bugForm.techniques = draft.techniques.map((t) => t.id);
+  }
+
+  function bugView() {
+    if (!state.bug) {
+      return h('div', null,
+        h('div', { class: 'muted' }, 'Builds a bug report from what you have recorded: steps, failed and slow API calls, console errors, screenshots and the ISTQB technique used.'),
+        h('div', { class: 'actions' },
+          h('button', { class: 'b p', disabled: state.busy, onclick: () => run(loadBugDraft) }, 'Start bug report')));
+    }
+    const f = state.bugForm;
+    const d = state.bug;
+    const set = (key) => (e) => { f[key] = e.target.value; };
+    const detected = new Set(d.techniques.map((t) => t.id));
+    const area = (key, label, rows) => h('div', null,
+      h('label', { class: 'f' }, label),
+      h('textarea', { 'aria-label': label, rows: rows || 3, style: 'width:100%;font:inherit;padding:5px 6px;border:1px solid #d1d5db;border-radius:6px', oninput: set(key) }, f[key]));
+    return h('div', null,
+      h('div', { class: 'muted' },
+        `${d.steps} steps, ${d.failedApiCalls} failed API calls, ${d.slowApiCalls} slow, ${d.consoleErrors} console errors, ${d.pageErrors} JS errors.`),
+      d.hasPreviousBug ? h('div', { class: 'row', style: 'margin-top:6px' },
+        h('label', { class: 'auto' }, h('input', { type: 'radio', name: 'scope', checked: f.scope === 'session',
+          onchange: () => { f.scope = 'session'; run(loadBugDraft); } }), ' Whole session'),
+        h('label', { class: 'auto' }, h('input', { type: 'radio', name: 'scope', checked: f.scope === 'since-last-bug',
+          onchange: () => { f.scope = 'since-last-bug'; run(loadBugDraft); } }), ' Since last bug')) : null,
+      h('label', { class: 'f' }, 'Title'),
+      h('input', { 'aria-label': 'Bug title', value: f.title, oninput: set('title') }),
+      area('expected', 'Expected result', 2),
+      area('actual', 'Actual result (filled from the recording)', 4),
+      h('div', { class: 'row' },
+        h('div', null, h('label', { class: 'f' }, 'Severity'),
+          h('select', { 'aria-label': 'Severity', onchange: set('severity') },
+            ['critical', 'major', 'minor', 'trivial'].map((v) => h('option', { value: v, selected: f.severity === v }, v)))),
+        h('div', null, h('label', { class: 'f' }, 'Priority'),
+          h('select', { 'aria-label': 'Priority', onchange: set('priority') },
+            ['high', 'medium', 'low'].map((v) => h('option', { value: v, selected: f.priority === v }, v))))),
+      h('h4', null, 'ISTQB test technique'),
+      h('div', null, state.init.techniques.map((t) => h('label', { style: 'display:block;font-size:12px;margin:2px 0' },
+        h('input', {
+          type: 'checkbox', checked: f.techniques.includes(t.id),
+          onchange: (e) => {
+            f.techniques = e.target.checked ? [...f.techniques, t.id] : f.techniques.filter((x) => x !== t.id);
+          },
+        }), ' ', t.name, detected.has(t.id) ? h('span', { class: 'muted' }, ' (detected)') : null))),
+      area('notes', 'Notes (optional)', 2),
+      h('div', { class: 'actions' },
+        h('button', {
+          class: 'b p', disabled: state.busy,
+          onclick: () => run(async () => {
+            const r = await call('createBug', { bug: { ...f } });
+            state.lastBug = r;
+            state.bug = null;
+            state.bugForm = { ...state.bugForm, title: '', expected: '', actual: '', notes: '', scope: 'since-last-bug' };
+            flash(`Saved "${r.title}" to ${r.html}`, 'ok');
+          }),
+        }, 'Create bug report'),
+        h('button', { class: 'b', disabled: state.busy, onclick: () => run(loadBugDraft) }, 'Refresh from recording')));
+  }
+
   function render() {
     if (!root) return;
     root.replaceChildren(h('style', null, CSS));
-    root.append(h('button', { class: 'pill', title: 'Test data (Alt+Shift+D)', onclick: toggle }, state.open ? 'Close test data' : 'Test data'));
+    root.append(h('button', { class: 'pill', title: 'QA recorder (Alt+Shift+D)', onclick: toggle }, state.open ? 'Close QA tools' : 'QA tools'));
     if (!state.open) return;
-    const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper']];
+    const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['bug', 'Bug']];
     let body;
     if (!state.init) body = h('div', { class: 'muted' }, 'Loading…');
     else if (state.tab === 'faker') body = fakerView();
     else if (state.tab === 'bva') body = boundaryView();
     else if (state.tab === 'edge') body = edgeView();
     else if (state.tab === 'profiles') body = profilesView();
+    else if (state.tab === 'bug') body = bugView();
     else body = loopView();
-    root.append(h('div', { class: 'panel', role: 'dialog', 'aria-label': 'Test data' },
-      h('header', null, h('b', null, 'Test data'),
+    root.append(h('div', { class: 'panel', role: 'dialog', 'aria-label': 'QA recorder' },
+      h('header', null, h('b', null, 'QA recorder'),
         h('span', { class: 'muted' }, state.init ? `seed ${state.init.seed}` : '')),
       targetView(),
       h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([id, label]) =>

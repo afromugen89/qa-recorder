@@ -10,8 +10,11 @@ import {
   type Request,
 } from 'playwright';
 import { DataService } from '../data/service.js';
+import { bugDraft, type BugInput } from '../report/bug.js';
+import { writeBugReport, type WrittenReport } from '../report/render.js';
 import type {
   ActionEvent,
+  BugEvent,
   LoopEvent,
   NetworkEvent,
   RecorderOptions,
@@ -99,6 +102,9 @@ export class Recorder {
   private expectedTags = new Map<string, { tag: TestDataTag; at: number }>();
   private loopContext?: { runId: number; iteration: number };
   private inflight = 0;
+  private userAgent?: string;
+  /** seq of the last bug report, so the next one can start after it. */
+  private lastBugSeq = 0;
 
   constructor(options: RecorderOptions = {}) {
     this.options = {
@@ -142,7 +148,10 @@ export class Recorder {
         ),
       );
     });
-    await this.context.exposeBinding('__qaPanel', (source, command) => this.data.handle(source.page, command));
+    await this.context.exposeBinding('__qaPanel', (source, command: { cmd: string; [key: string]: unknown }) => {
+      if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug') return this.handleBugCommand(source.page, command);
+      return this.data.handle(source.page, command);
+    });
     if (this.options.panel) await this.context.addInitScript({ content: PANEL_SCRIPT });
 
     this.context.on('page', (page) => this.attachPage(page, true));
@@ -152,6 +161,7 @@ export class Recorder {
     this.browser.on('disconnected', () => this.closedListeners.forEach((fn) => fn()));
 
     this.page = await this.context.newPage();
+    this.userAgent = await this.page.evaluate(() => navigator.userAgent).catch(() => undefined);
     if (this.options.url) {
       await this.page.goto(this.options.url).catch((error: Error) => {
         // Keep recording even if the first page fails to load; the failure is itself useful.
@@ -189,11 +199,56 @@ export class Recorder {
         startedAt: this.startedAt.toISOString(),
         browser: `chromium ${this.browser?.version() ?? ''}`.trim(),
         slowThresholdMs: this.options.slowThresholdMs,
+        userAgent: this.userAgent,
         dataSeed: this.data?.generator.seed,
       },
       summary: this.summarize(),
       events: [...this.events].sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq),
     };
+  }
+
+  /**
+   * Writes a bug report (HTML, Markdown and JSON) from what has been recorded
+   * so far, with a screenshot of the current page.
+   */
+  async createBug(input: BugInput & { scope?: 'session' | 'since-last-bug'; page?: Page } = {}): Promise<WrittenReport> {
+    const page = input.page && !input.page.isClosed() ? input.page : this.page;
+    await this.settle();
+    let screenshot: string | undefined;
+    if (!page.isClosed()) {
+      screenshot = `screenshots/bug-${String(this.seq + 1).padStart(4, '0')}.png`;
+      await page.screenshot({ path: join(this.sessionDir, screenshot), style: SCREENSHOT_STYLE }).catch(() => {
+        screenshot = undefined;
+      });
+    }
+    const fromSeq = input.fromSeq ?? (input.scope === 'since-last-bug' ? this.lastBugSeq : 0);
+    const { page: _page, scope: _scope, ...rest } = input;
+    const written = writeBugReport(this.sessionDir, this.snapshot(), { ...rest, fromSeq, screenshot });
+    const bug = this.push<BugEvent>({
+      type: 'bug',
+      pageId: this.pageId(page),
+      title: written.report.title,
+      reportDir: written.dir.slice(this.sessionDir.length + 1).replace(/\\/g, '/'),
+    });
+    this.lastBugSeq = bug.seq;
+    return written;
+  }
+
+  private async handleBugCommand(page: Page, command: { cmd: string; [key: string]: unknown }) {
+    try {
+      if (command.cmd === 'bugDraft') {
+        const scope = command.scope === 'since-last-bug' ? 'since-last-bug' : 'session';
+        return {
+          ok: true,
+          result: { ...bugDraft(this.snapshot(), scope === 'since-last-bug' ? this.lastBugSeq : 0), hasPreviousBug: this.lastBugSeq > 0 },
+        };
+      }
+      const input = (command.bug ?? {}) as BugInput & { scope?: 'session' | 'since-last-bug' };
+      const written = await this.createBug({ ...input, page });
+      return { ok: true, result: { title: written.report.title, dir: written.dir, html: written.html, markdown: written.markdown } };
+    } catch (error) {
+      return { ok: false, error: (error as Error).message };
+    }
   }
 
   // ---------- internals ----------

@@ -42,7 +42,7 @@ Options:
 
 ## Test data panel
 
-While recording, press **Alt+Shift+D** or click **Test data** at the bottom right of the page. Click into any field on the page (including fields in iframes and shadow DOM), then choose what goes in it. The panel is hidden from screenshots, isn't recorded, and Playwright locators can't see it.
+While recording, press **Alt+Shift+D** or click **QA tools** at the bottom right of the page. Click into any field on the page (including fields in iframes and shadow DOM), then choose what goes in it. The panel is hidden from screenshots, isn't recorded, and Playwright locators can't see it.
 
 | Tab | What it does | ISTQB technique tagged |
 | --- | --- | --- |
@@ -84,6 +84,37 @@ npx qa-recorder data date --min 2026-01-01 --max 2026-12-31
 npx qa-recorder data edge
 ```
 
+## Bug reports
+
+When you find a bug, open the panel (Alt+Shift+D), go to the **Bug** tab and choose **Start bug report**. The form is filled in from the recording:
+
+- **Title**, suggested from the most serious failure and the step that caused it, for example `GET /api/orders returns 500 after clicking "Save" button`.
+- **Actual result**, listing the failed API calls with their response, uncaught errors, console errors and slow calls.
+- **ISTQB technique**, detected from the test data you used: boundary value analysis, equivalence partitioning, error guessing, random testing, use case testing (looper), or exploratory testing if you used none. Tick or untick techniques to change it.
+- Add the expected result, severity, priority and notes, then choose **Create bug report**.
+
+Each report is saved in `recordings/<session>/bugs/<nn>-<title>/`:
+
+| File | Use |
+| --- | --- |
+| `report.html` | One self-contained page with screenshots embedded. Open it, print it, or attach it to a ticket. |
+| `report.md` | Paste into Jira, GitHub or Azure DevOps. |
+| `bug.json` | The same data, structured, for importing into other tools. |
+
+A report contains the environment, numbered steps to reproduce in plain English (with the test data technique and expected valid/invalid for each generated value), expected and actual results, the ISTQB technique and why it was detected, failed API calls with request and response bodies, slow API calls, console and JavaScript errors linked to the step that caused them, **API response times per endpoint** (calls, errors, average, p95, max), screenshots, and the full timeline.
+
+The second bug in a session can cover the whole session or only what happened since the previous bug.
+
+You can also write a report after recording:
+
+```bash
+npx qa-recorder report recordings/2026-11-03_14-05-12 \
+  --title "Order list fails to load" --expected "Orders are shown" \
+  --severity major --priority high --technique bva,eg
+```
+
+Technique short names: `bva`, `ep`, `dt` (decision table), `st` (state transition), `eg` (error guessing), `exploratory`, `checklist`, `use-case`, `random`.
+
 ## Output
 
 Each session is saved in `recordings/<timestamp>/`:
@@ -94,7 +125,7 @@ network.har       full network log (open in Chrome DevTools or any HAR viewer)
 screenshots/      one PNG after each action
 ```
 
-`session.json` holds one timeline. Each event has a `type` of `action`, `network`, `console`, `pageerror`, `navigation` or `loop`. Actions carry a Playwright locator in two forms:
+`session.json` holds one timeline. Each event has a `type` of `action`, `network`, `console`, `pageerror`, `navigation`, `loop` or `bug`. Actions carry a Playwright locator in two forms:
 
 ```json
 {
@@ -139,5 +170,5 @@ npm run build
 
 1. Recorder core ✓
 2. Test data tools ✓
-3. Bug report: HTML and Markdown with steps, screenshots, API failures, console errors and the ISTQB test technique used
+3. Bug report ✓
 4. Playwright test script export
