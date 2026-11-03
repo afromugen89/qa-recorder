@@ -36,6 +36,53 @@ Options:
 | `--include-documents` | | Also log full page loads, not just XHR and fetch |
 | `--headless` | | No window (for CI) |
 | `--executable <path>` | | Use a specific Chrome or Chromium binary |
+| `--no-panel` | | Hide the test data panel |
+| `--profiles <file>` | `.qa-recorder/profiles.json` | Where data profiles are saved |
+| `--seed <n>` | random | Faker seed, to reproduce generated data |
+
+## Test data panel
+
+While recording, press **Alt+Shift+D** or click **Test data** at the bottom right of the page. Click into any field on the page (including fields in iframes and shadow DOM), then choose what goes in it. The panel is hidden from screenshots, isn't recorded, and Playwright locators can't see it.
+
+| Tab | What it does | ISTQB technique tagged |
+| --- | --- | --- |
+| **Faker** | Pick a data type (name, email, phone, address, company, price, number range, dates, card numbers, regex pattern, template, or any Faker method) and a locale, then fill the field or preview 5 values. | Random testing |
+| **Boundaries** | Reads the field's `maxlength`, `minlength`, `min`, `max` and `type` and suggests cases. You can also enter your own number, text-length or date range, choose 2-value or 3-value BVA, and add equivalence partitions. Each case is labelled valid or invalid. | Boundary value analysis, equivalence partitioning |
+| **Edge cases** | Empty, spaces, special characters, Unicode, emoji, RTL text, HTML/script, SQL quotes and injection, very long input, number overflow. | Error guessing |
+| **Profiles** | Save "which generator goes in which field" for a form, then fill the whole form with fresh data in one click. Saved to `.qa-recorder/profiles.json`, which you can commit and share. | Random testing |
+| **Looper** | Start capturing, do a flow once (for example fill the form and click Add), then finish. For each field, choose to keep the recorded value or generate a new one (any Faker type, or a template like `Item {i}`). Then run it N times. API calls and errors from every iteration are captured. | Random testing |
+
+Typing past `maxlength` is cut off the way a real user would see it. Tick **Ignore maxlength** to send the full value and test the server's validation instead.
+
+Every value the panel puts on the page is tagged on the recorded action, so the bug report can say exactly what was entered and why:
+
+```json
+{
+  "action": "fill",
+  "value": "abcdefghi1abcdefghi2a",
+  "testData": {
+    "source": "boundary",
+    "technique": "boundary-value-analysis",
+    "label": "max + 1 (21 chars)",
+    "expected": "invalid"
+  }
+}
+```
+
+Generated data is seeded, and the seed is saved in `session.json`. Start with `--seed <n>` to get the same values again.
+
+### Test data in the terminal
+
+```bash
+npx qa-recorder data types                                      # list data types
+npx qa-recorder data fake email -n 10 --locale de
+npx qa-recorder data fake template --template "{{person.firstName}}.qa+{i}@test.com" -n 5
+npx qa-recorder data fake pattern --pattern "[A-Z]{3}-[0-9]{4}"
+npx qa-recorder data bva --min 1 --max 99 --three --partitions
+npx qa-recorder data length --min 2 --max 50 --charset email
+npx qa-recorder data date --min 2026-01-01 --max 2026-12-31
+npx qa-recorder data edge
+```
 
 ## Output
 
@@ -47,7 +94,7 @@ network.har       full network log (open in Chrome DevTools or any HAR viewer)
 screenshots/      one PNG after each action
 ```
 
-`session.json` holds one timeline. Each event has a `type` of `action`, `network`, `console`, `pageerror` or `navigation`. Actions carry a Playwright locator in two forms:
+`session.json` holds one timeline. Each event has a `type` of `action`, `network`, `console`, `pageerror`, `navigation` or `loop`. Actions carry a Playwright locator in two forms:
 
 ```json
 {
@@ -90,7 +137,7 @@ npm run build
 
 ## Roadmap
 
-1. Recorder core (this release)
-2. Test data tools: Faker-based field filler, boundary values, text-length limits, and a looper that repeats a flow with random data
+1. Recorder core ✓
+2. Test data tools ✓
 3. Bug report: HTML and Markdown with steps, screenshots, API failures, console errors and the ISTQB test technique used
 4. Playwright test script export

@@ -9,17 +9,25 @@ import {
   type Page,
   type Request,
 } from 'playwright';
+import { DataService } from '../data/service.js';
 import type {
   ActionEvent,
+  LoopEvent,
   NetworkEvent,
   RecorderOptions,
   SessionData,
   SessionSummary,
+  TestDataTag,
   TimelineEvent,
 } from './types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INJECTED_SCRIPT = readFileSync(join(here, '..', 'injected', 'recorder.js'), 'utf8');
+const PANEL_SCRIPT = readFileSync(join(here, '..', 'injected', 'panel.js'), 'utf8');
+/** Hide the panel in screenshots so they show only the app. */
+const SCREENSHOT_STYLE = 'qa-recorder-panel { display: none !important; }';
+/** A tagged value must show up as an action within this time to get its tag. */
+const TAG_WINDOW_MS = 5_000;
 
 const MAX_REQUEST_BODY = 4_000;
 const MAX_RESPONSE_BODY = 10_000;
@@ -71,8 +79,11 @@ export class Recorder {
   /** The first tab. */
   page!: Page;
 
-  private readonly options: Required<Omit<RecorderOptions, 'url' | 'executablePath' | 'onEvent'>> &
-    Pick<RecorderOptions, 'url' | 'executablePath' | 'onEvent'>;
+  /** Test data generator, profiles and looper behind the in-page panel. */
+  data!: DataService;
+
+  private readonly options: Required<Omit<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed'>> &
+    Pick<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed'>;
   private readonly startedAt = new Date();
   private seq = 0;
   private pageIds = new WeakMap<Page, number>();
@@ -84,6 +95,10 @@ export class Recorder {
   private pending = new Set<Promise<unknown>>();
   private stopped?: Promise<SessionData>;
   private closedListeners: Array<() => void> = [];
+  private pagesById = new Map<number, Page>();
+  private expectedTags = new Map<string, { tag: TestDataTag; at: number }>();
+  private loopContext?: { runId: number; iteration: number };
+  private inflight = 0;
 
   constructor(options: RecorderOptions = {}) {
     this.options = {
@@ -94,6 +109,8 @@ export class Recorder {
       captureWarnings: true,
       apiResourceTypes: ['xhr', 'fetch'],
       headless: false,
+      panel: true,
+      profilesPath: join('.qa-recorder', 'profiles.json'),
       ...options,
     };
     this.sessionDir = resolve(this.options.outDir, timestampFolder(this.startedAt));
@@ -116,6 +133,17 @@ export class Recorder {
       this.onAction(source.page, source.frame, payload);
     });
     await this.context.addInitScript({ content: INJECTED_SCRIPT });
+
+    this.data = new DataService(this.dataHost(), resolve(this.options.profilesPath), this.options.seed);
+    await this.context.exposeBinding('__qaFocus', (source, payload) => {
+      this.track(
+        this.resolveFramePath(source.frame).then((framePath) =>
+          this.data.onFocus(source.page, source.frame, payload, framePath),
+        ),
+      );
+    });
+    await this.context.exposeBinding('__qaPanel', (source, command) => this.data.handle(source.page, command));
+    if (this.options.panel) await this.context.addInitScript({ content: PANEL_SCRIPT });
 
     this.context.on('page', (page) => this.attachPage(page, true));
     this.context.on('request', (request) => this.onRequest(request));
@@ -161,6 +189,7 @@ export class Recorder {
         startedAt: this.startedAt.toISOString(),
         browser: `chromium ${this.browser?.version() ?? ''}`.trim(),
         slowThresholdMs: this.options.slowThresholdMs,
+        dataSeed: this.data?.generator.seed,
       },
       summary: this.summarize(),
       events: [...this.events].sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq),
@@ -236,6 +265,8 @@ export class Recorder {
 
   private attachPage(page: Page, isNew: boolean): void {
     const pageId = this.pageId(page);
+    this.pagesById.set(pageId, page);
+    page.on('close', () => this.pagesById.delete(pageId));
     if (isNew && pageId > 1) {
       this.push({ type: 'navigation', pageId, url: page.url(), newPage: true });
     }
@@ -275,6 +306,8 @@ export class Recorder {
     const masked = raw.sensitive && !this.options.keepSecrets;
     const value = masked && raw.value !== undefined ? MASK : raw.value;
 
+    const testData = this.takeTestData(pageId, raw);
+
     // Typing fires one input event per keystroke; keep only the final value.
     const last = this.events[this.events.length - 1];
     if (
@@ -285,6 +318,7 @@ export class Recorder {
       this.actionFrames.get(last) === frame
     ) {
       last.value = value;
+      if (testData) last.testData = testData;
       last.timestamp = raw.timestamp;
       last.elapsedMs = raw.timestamp - this.startedAt.getTime();
       this.scheduleSave();
@@ -309,6 +343,8 @@ export class Recorder {
       ...(raw.files && { files: raw.files }),
       ...(raw.button && raw.button !== 'left' && { button: raw.button }),
       ...(raw.modifiers?.length && { modifiers: raw.modifiers }),
+      ...(testData && { testData }),
+      ...(this.loopContext && { loop: { ...this.loopContext } }),
     });
     this.actionFrames.set(event, frame);
     if (frame !== page.mainFrame()) this.track(this.resolveFramePath(frame).then((path) => (event.framePath = path)));
@@ -341,7 +377,7 @@ export class Recorder {
       if (this.stopped || page.isClosed()) return;
       const file = `screenshots/${String(event.seq).padStart(4, '0')}-${event.action}.png`;
       this.track(
-        page.screenshot({ path: join(this.sessionDir, file) }).then(() => {
+        page.screenshot({ path: join(this.sessionDir, file), style: SCREENSHOT_STYLE }).then(() => {
           event.screenshot = file;
           this.scheduleSave();
         }),
@@ -357,6 +393,7 @@ export class Recorder {
   private onRequest(request: Request): void {
     if (!this.isApi(request)) return;
     const start = Date.now();
+    this.inflight++;
     this.requestStarts.set(request, { start, triggeredBy: this.lastActionBefore(start)?.seq });
   }
 
@@ -383,8 +420,13 @@ export class Recorder {
     };
   }
 
+  private settleRequest(request: Request): void {
+    if (this.requestStarts.has(request)) this.inflight = Math.max(0, this.inflight - 1);
+  }
+
   private async onRequestFinished(request: Request): Promise<void> {
     if (!this.isApi(request)) return;
+    this.settleRequest(request);
     const { started, fields } = this.baseNetwork(request);
     const response = await request.response();
     const timing = request.timing();
@@ -413,6 +455,7 @@ export class Recorder {
 
   private onRequestFailed(request: Request): void {
     if (!this.isApi(request)) return;
+    this.settleRequest(request);
     const { started, fields } = this.baseNetwork(request);
     this.push<NetworkEvent>({
       ...fields,
@@ -421,6 +464,39 @@ export class Recorder {
       isError: true,
       isSlow: false,
     });
+  }
+
+  private takeTestData(pageId: number, raw: RawAction): TestDataTag | undefined {
+    if (raw.kind !== 'fill' && raw.kind !== 'select') return undefined;
+    const key = `${pageId}|${raw.locator.selector}`;
+    const expected = this.expectedTags.get(key);
+    if (!expected) return undefined;
+    this.expectedTags.delete(key);
+    return Date.now() - expected.at <= TAG_WINDOW_MS ? expected.tag : undefined;
+  }
+
+  private dataHost() {
+    return {
+      pageById: (id: number) => this.pagesById.get(id),
+      pageIdOf: (page: Page) => this.pageId(page),
+      actions: () => this.events.filter((e): e is ActionEvent => e.type === 'action'),
+      lastSeq: () => this.seq,
+      expectTestData: (pageId: number, selector: string, tag: TestDataTag) => {
+        this.expectedTags.set(`${pageId}|${selector}`, { tag, at: Date.now() });
+      },
+      setLoopContext: (context: { runId: number; iteration: number } | undefined) => {
+        this.loopContext = context;
+      },
+      pushLoopEvent: (event: Omit<LoopEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>) => {
+        this.push<LoopEvent>({ type: 'loop', ...event });
+      },
+      waitForApiIdle: async (timeoutMs: number) => {
+        const deadline = Date.now() + timeoutMs;
+        // Give a just-clicked request a moment to start before checking.
+        await new Promise((r) => setTimeout(r, 100));
+        while (this.inflight > 0 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+      },
+    };
   }
 
   private summarize(): SessionSummary {

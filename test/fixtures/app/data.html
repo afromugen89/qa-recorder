@@ -1,0 +1,33 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>Data demo</title></head>
+<body>
+  <h1>Add items</h1>
+  <form id="item-form" onsubmit="event.preventDefault()">
+    <label for="name">Name</label>
+    <input id="name" maxlength="20" minlength="2" required>
+    <label for="email">Email</label>
+    <input id="email" type="email">
+    <label for="qty">Quantity</label>
+    <input id="qty" type="number" min="1" max="99">
+    <label for="due">Due date</label>
+    <input id="due" type="date" min="2026-01-01" max="2026-12-31">
+    <label for="size">Size</label>
+    <select id="size"><option value="s">Small</option><option value="m">Medium</option><option value="l">Large</option></select>
+    <button id="add" type="button">Add</button>
+  </form>
+  <ul id="items"></ul>
+  <script>
+    document.getElementById('add').addEventListener('click', async () => {
+      const name = document.getElementById('name').value;
+      const email = document.getElementById('email').value;
+      await fetch('/api/ok', { method: 'POST', body: JSON.stringify({ name, email }) });
+      const li = document.createElement('li');
+      li.textContent = `${name} <${email}>`;
+      document.getElementById('items').append(li);
+      document.getElementById('name').value = '';
+      document.getElementById('email').value = '';
+    });
+  </script>
+</body>
+</html>

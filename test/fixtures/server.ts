@@ -29,6 +29,10 @@ function handler(crossOrigin: () => string) {
         res.writeHead(200, { 'content-type': 'text/html' });
         res.end(readFileSync(join(appDir, 'index.html'), 'utf8').replace('__CROSS_ORIGIN__', crossOrigin()));
         return;
+      case '/data.html':
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(readFileSync(join(appDir, 'data.html')));
+        return;
       case '/frame.html':
         res.writeHead(200, { 'content-type': 'text/html' });
         res.end(readFileSync(join(appDir, 'frame.html')));

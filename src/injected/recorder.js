@@ -5,6 +5,8 @@
   if (window.__qaRecorder) return;
 
   const MAX_NAME = 80;
+  /** Tag of qa-recorder's own panel. Events inside it are never recorded. */
+  const UI_TAG = 'qa-recorder-panel';
   const CLOSED_ROOTS = new WeakSet();
   const CLOSED_HOSTS = new WeakSet();
   const SEEN_EVENTS = new WeakSet();
@@ -56,11 +58,23 @@
     const walker = (root.ownerDocument || root).createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
     let node = walker.nextNode();
     while (node) {
+      if (node.localName === UI_TAG) {
+        node = walker.nextSibling() || nextOutside(walker);
+        continue;
+      }
       out.push(node);
       if (node.shadowRoot) deepElements(node.shadowRoot, out);
       node = walker.nextNode();
     }
     return out;
+  }
+
+  function nextOutside(walker) {
+    while (walker.parentNode()) {
+      const sibling = walker.nextSibling();
+      if (sibling) return sibling;
+    }
+    return null;
   }
 
   function normalize(text) {
@@ -303,9 +317,14 @@
 
   // An event from inside a closed shadow root looks like it targets the host when
   // seen from outside. Skip it there; the listener on the closed root handles it.
+  function isOwnUi(event) {
+    return event.composedPath().some((n) => n.localName === UI_TAG);
+  }
+
   function claim(event) {
     if (SEEN_EVENTS.has(event)) return false;
     if (CLOSED_HOSTS.has(deepTarget(event))) return false;
+    if (isOwnUi(event)) return false;
     SEEN_EVENTS.add(event);
     return true;
   }
@@ -385,7 +404,98 @@
     record('press', el, { key: [...mods, event.key].join('+') });
   }
 
+  // ---------- field targeting for the test data panel ----------
+
+  let lastField = null;
+
+  function isFillable(el) {
+    return isTextLike(el) || el.localName === 'select';
+  }
+
+  function num(value) {
+    return value === null || value === '' ? undefined : Number(value);
+  }
+
+  function constraintsOf(el) {
+    const attr = (name) => el.getAttribute(name) || undefined;
+    const maxLength = num(el.getAttribute('maxlength'));
+    const minLength = num(el.getAttribute('minlength'));
+    return {
+      type: el.localName === 'input' ? (attr('type') || 'text').toLowerCase() : el.localName,
+      maxLength: maxLength !== undefined && maxLength >= 0 ? maxLength : undefined,
+      minLength,
+      min: attr('min'),
+      max: attr('max'),
+      step: attr('step'),
+      pattern: attr('pattern'),
+      required: el.hasAttribute('required') || el.getAttribute('aria-required') === 'true',
+      options: el.localName === 'select'
+        ? Array.from(el.options).map((o) => ({ value: o.value, label: normalize(o.label || o.textContent) }))
+        : undefined,
+    };
+  }
+
+  function onFocusIn(event) {
+    if (isOwnUi(event)) return;
+    const el = deepTarget(event);
+    if (!el || el.nodeType !== 1 || !isFillable(el) || el === lastField) return;
+    lastField = el;
+    let locator;
+    try {
+      locator = buildLocator(el);
+    } catch (_) {
+      locator = { strategy: 'css', selector: el.localName, code: `locator(${quote(el.localName)})` };
+    }
+    try {
+      if (typeof window.__qaFocus === 'function') {
+        window.__qaFocus({
+          locator,
+          element: describe(el),
+          label: accessibleName(el) || el.getAttribute('name') || el.getAttribute('placeholder') || el.localName,
+          constraints: constraintsOf(el),
+        });
+      }
+    } catch (_) { /* ignore */ }
+  }
+
+  // Set a value the way a framework expects: through the native setter, then
+  // input and change events, so React, Vue and Angular all see the change.
+  function setValue(el, value) {
+    el.focus();
+    if (el.isContentEditable) {
+      el.textContent = value;
+    } else if (el.localName === 'select') {
+      const match = Array.from(el.options).find((o) => o.value === value || normalize(o.label) === value);
+      if (!match) throw new Error(`No option "${value}"`);
+      el.value = match.value;
+    } else {
+      const proto = el.localName === 'textarea' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(el, value);
+    }
+    if (el.localName !== 'select') el.dispatchEvent(new Event('input', { bubbles: true, composed: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true, composed: true }));
+  }
+
+  // Typing or pasting stops at maxlength, but setting .value does not. Apply the
+  // limit like a real user would hit it, unless asked to bypass it (to test
+  // server-side validation).
+  function fillField(value, options) {
+    if (!lastField || !lastField.isConnected) {
+      throw new Error('Click into a field on the page first');
+    }
+    const el = lastField;
+    let toSet = value;
+    const max = el.maxLength;
+    const truncated = !(options && options.bypassMaxLength) && typeof max === 'number' && max >= 0 && value.length > max;
+    if (truncated) toSet = value.slice(0, max);
+    setValue(el, toSet);
+    const accepted = el.isContentEditable ? el.textContent : el.value;
+    return { requested: value.length, accepted, acceptedLength: accepted.length, truncated };
+  }
+
   function listen(target) {
+    target.addEventListener('focusin', onFocusIn, true);
     target.addEventListener('click', onClick, true);
     target.addEventListener('dblclick', onDblClick, true);
     target.addEventListener('input', onInput, true);
@@ -410,8 +520,11 @@
 
   window.__qaRecorder = {
     version: 1,
+    uiTag: UI_TAG,
+    attachShadow: (el, init) => originalAttachShadow.call(el, init),
     selectorFor(el) {
       return buildLocator(el);
     },
+    fillField,
   };
 })();
