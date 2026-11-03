@@ -38,6 +38,7 @@ Options:
 | `--executable <path>` | | Use a specific Chrome or Chromium binary |
 | `--no-panel` | | Hide the test data panel |
 | `--profiles <file>` | `.qa-recorder/profiles.json` | Where data profiles are saved |
+| `--mocks <file>` | `.qa-recorder/mocks.json` | Where API mock rules are saved |
 | `--seed <n>` | random | Faker seed, to reproduce generated data |
 
 ## Test data panel
@@ -83,6 +84,28 @@ npx qa-recorder data length --min 2 --max 50 --charset email
 npx qa-recorder data date --min 2026-01-01 --max 2026-12-31
 npx qa-recorder data edge
 ```
+
+## API mocking
+
+The **Mock** tab intercepts API calls so you can test how the app handles responses that are hard to get from a real server.
+
+**Fastest way:** the tab lists recent API calls. Click **Mock this** on one, change what you need, and save.
+
+Each mock rule matches by **method** (or any) and **URL**. Plain text matches anywhere in the URL, `*` is a wildcard (`/api/orders/*`), and `/regex/` is a regular expression. Then:
+
+**Before it is sent (request)**
+- **Headers:** one per line. `Authorization: Bearer expired` sets a header and `-X-Request-Id` removes one.
+- **JSON fields:** one per line. `quantity = 0`, `user.role = "admin"` and `items[0].price = -1` set values, and `-coupon` removes a field.
+- **Replace the whole body** if you need to.
+
+**After it is sent (response)**
+- **Change the real response:** the server is called, then you change the status code, headers, JSON fields or the whole body.
+- **Return my response:** the server isn't called. You give the status, headers and body, which is useful for endpoints that don't exist yet.
+- **Simulate a network failure:** failed, timed out, connection refused, offline.
+- **Delay** any call by N ms to test loading states and timeouts.
+- **Only once:** the rule switches itself off after one use, for example to make just the first attempt fail.
+
+Rules are saved to `.qa-recorder/mocks.json` (change with `--mocks <file>`). Commit it and the team gets the same mocks. While any mock is on, the QA tools button turns orange and shows how many are on. Every mocked call is labelled in the terminal, in `session.json` (`"mock": { "rule": …, "changes": [...] }`) and in bug reports, which also warn that mocks were active so nobody files a bug caused by a mock.
 
 ## Bug reports
 

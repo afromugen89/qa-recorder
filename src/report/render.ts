@@ -22,7 +22,14 @@ function shortUrl(url: string): string {
 }
 
 function callStatus(c: ReportApiCall): string {
-  return c.failure ? `failed: ${c.failure}` : `${c.status ?? ''} ${c.statusText ?? ''}`.trim();
+  const status = c.failure ? `failed: ${c.failure}` : `${c.status ?? ''} ${c.statusText ?? ''}`.trim();
+  return c.mock ? `${status} (mocked: ${c.mock})` : status;
+}
+
+function mockWarning(r: BugReport): string | undefined {
+  if (!r.mocks.length) return undefined;
+  const calls = r.mocks.reduce((sum, m) => sum + m.calls, 0);
+  return `API mocks were active: ${calls} call${calls > 1 ? 's were' : ' was'} changed by ${r.mocks.map((m) => `"${m.rule}"`).join(', ')}. Check whether the bug also happens without them.`;
 }
 
 /** `imageBase` is the path from the Markdown file to the session folder. */
@@ -36,6 +43,8 @@ export function renderMarkdown(r: BugReport, imageBase = '.'): string {
     r.reporter && `**Reporter:** ${r.reporter}`,
   ].filter(Boolean);
   out.push(facts.join('  \n'), '');
+  const warning = mockWarning(r);
+  if (warning) out.push(`> ⚠️ ${warning}`, '');
 
   out.push('## Environment', '');
   out.push(`- URL: ${r.environment.url ?? 'n/a'}`);
@@ -103,6 +112,14 @@ export function renderMarkdown(r: BugReport, imageBase = '.'): string {
     out.push('');
   }
 
+  if (r.mocks.length) {
+    out.push('## API mocks used', '');
+    for (const m of r.mocks) {
+      out.push(`- **${m.rule}** (${m.calls} call${m.calls > 1 ? 's' : ''}): ${m.changes.slice(0, 8).join('; ') || 'no changes'}`);
+    }
+    out.push('');
+  }
+
   if (r.notes) out.push('## Notes', '', r.notes, '');
 
   const shots = r.steps.filter((s) => s.screenshot);
@@ -136,7 +153,7 @@ function timelineRow(e: TimelineEvent): string {
     case 'action':
       return `<tr><td>${t}</td><td>action</td><td>${esc(e.action)} <code>${esc(e.locator.code)}</code>${e.value !== undefined ? ` = ${esc(JSON.stringify(e.value).slice(0, 80))}` : ''}${e.loop ? ` <span class="tag">loop ${e.loop.iteration}</span>` : ''}</td></tr>`;
     case 'network':
-      return `<tr class="${e.isError ? 'bad' : e.isSlow ? 'warn' : ''}"><td>${t}</td><td>api</td><td>${esc(e.method)} ${esc(shortUrl(e.url))} → ${esc(e.failure ?? e.status)} in ${e.durationMs ?? '?'} ms</td></tr>`;
+      return `<tr class="${e.isError ? 'bad' : e.isSlow ? 'warn' : ''}"><td>${t}</td><td>api</td><td>${esc(e.method)} ${esc(shortUrl(e.url))} → ${esc(e.failure ?? e.status)} in ${e.durationMs ?? '?'} ms${e.mock ? ` <span class="tag">mocked: ${esc(e.mock.rule)}</span>` : ''}</td></tr>`;
     case 'console':
       return `<tr class="${e.level === 'error' ? 'bad' : 'warn'}"><td>${t}</td><td>console</td><td>${esc(e.text.slice(0, 300))}</td></tr>`;
     case 'pageerror':
@@ -180,6 +197,7 @@ export function renderHtml(r: BugReport, sessionDir: string): string {
   ol.steps li { margin: 4px 0; }
   .detail { color: var(--muted); font-size: 12px; }
   .tag { font-size: 11px; padding: 0 6px; border-radius: 999px; background: var(--soft); border: 1px solid var(--line); }
+  .warnbox { background: var(--warn) !important; }
   .box { background: var(--soft); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; white-space: pre-wrap; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; }
   th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
@@ -198,6 +216,7 @@ export function renderHtml(r: BugReport, sessionDir: string): string {
 <body><main>
   <h1>${esc(r.title)}</h1>
   <div>${sev}${pri}${r.techniques.map((t) => `<span class="pill tech">${esc(t.name)}</span>`).join('')}</div>
+  ${mockWarning(r) ? `<p class="box warnbox">⚠️ ${esc(mockWarning(r))}</p>` : ''}
   <p class="meta">Reported ${esc(new Date(r.createdAt).toLocaleString())}${r.reporter ? ` by ${esc(r.reporter)}` : ''}</p>
 
   <h2>Environment</h2>
@@ -230,6 +249,8 @@ export function renderHtml(r: BugReport, sessionDir: string): string {
   ${r.apiPerformance.length ? `<h2>API response times</h2><div class="wrap"><table><thead><tr><th>Endpoint</th><th>Calls</th><th>Errors</th><th>Avg</th><th>p95</th><th>Max</th></tr></thead><tbody>
     ${r.apiPerformance.map((p) => `<tr class="${p.errors ? 'bad' : p.maxMs >= r.slowThresholdMs ? 'warn' : ''}"><td><code>${esc(p.endpoint)}</code></td><td>${p.calls}</td><td>${p.errors}</td><td>${p.avgMs} ms</td><td>${p.p95Ms} ms</td><td>${p.maxMs} ms</td></tr>`).join('')}
   </tbody></table></div>` : ''}
+
+  ${r.mocks.length ? `<h2>API mocks used</h2><ul>${r.mocks.map((m) => `<li><b>${esc(m.rule)}</b> (${m.calls} call${m.calls > 1 ? 's' : ''}): ${esc(m.changes.slice(0, 8).join('; ') || 'no changes')}</li>`).join('')}</ul>` : ''}
 
   ${r.notes ? `<h2>Notes</h2><div class="box">${esc(r.notes)}</div>` : ''}
 

@@ -23,6 +23,8 @@
     bug: null,
     bugForm: { scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', actual: '', notes: '', techniques: [] },
     lastBug: null,
+    mocks: { rules: [], active: 0, recent: [] },
+    mockEdit: null,
     message: null,
     busy: false,
   };
@@ -91,6 +93,8 @@
   const CSS = `
     :host { all: initial; }
     * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    .pill.warn { background: #b45309; }
+    textarea.ta { width: 100%; font: 12px ui-monospace, Menlo, monospace; padding: 5px 6px; border: 1px solid #d1d5db; border-radius: 6px; color: #111827; background: #fff; }
     .pill { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; background: #1f2937; color: #fff;
       border: 0; border-radius: 999px; padding: 8px 14px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
     .panel { position: fixed; right: 16px; bottom: 60px; z-index: 2147483647; width: 400px; max-width: calc(100vw - 32px);
@@ -141,6 +145,8 @@
     root = attach ? attach(host, { mode: 'closed' }) : host.attachShadow({ mode: 'closed' });
     document.documentElement.append(host);
     render();
+    // Show active mocks on the button even before the panel is opened.
+    call('mockState').then((m) => { state.mocks = m; render(); }).catch(() => undefined);
   }
 
   async function ensureInit() {
@@ -148,6 +154,140 @@
     state.init = await call('init');
     state.target = state.init.target;
     state.capture = state.init.capture;
+    state.mocks = await call('mockState');
+  }
+
+  // ---------- mocks ----------
+
+  const METHODS = ['', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'];
+  const FAILURES = ['failed', 'timedout', 'connectionrefused', 'internetdisconnected', 'aborted'];
+
+  function emptyRule() {
+    return {
+      name: '', method: '', url: '', enabled: true, once: false, delayMs: '',
+      request: { headers: '', fields: '', body: '' },
+      response: { mode: '', status: '', headers: '', fields: '', body: '', failure: 'failed' },
+    };
+  }
+
+  function editRule(rule) {
+    const base = emptyRule();
+    state.mockEdit = {
+      ...base,
+      ...rule,
+      method: rule.method || '',
+      delayMs: rule.delayMs || '',
+      request: { ...base.request, ...(rule.request || {}) },
+      response: { ...base.response, ...(rule.response || {}), status: rule.response && rule.response.status !== undefined ? rule.response.status : '' },
+    };
+    render();
+  }
+
+  function ruleSummary(r) {
+    const parts = [];
+    if (r.request) parts.push('edits request');
+    if (r.response) {
+      if (r.response.mode === 'fail') parts.push(`network ${r.response.failure || 'failed'}`);
+      else if (r.response.mode === 'replace') parts.push(`returns ${r.response.status || 200} (no server call)`);
+      else parts.push(r.response.status ? `status → ${r.response.status}` : 'edits response');
+    }
+    if (r.delayMs) parts.push(`+${r.delayMs} ms`);
+    if (r.once) parts.push('once');
+    return parts.join(', ');
+  }
+
+  function pathOf(url) {
+    try {
+      const u = new URL(url);
+      return u.pathname + u.search;
+    } catch (_) {
+      return url;
+    }
+  }
+
+  function mockEditor() {
+    const r = state.mockEdit;
+    const field = (obj, key, label, placeholder, rows) => h('div', null,
+      h('label', { class: 'f' }, label),
+      rows
+        ? h('textarea', { 'aria-label': label, rows, placeholder: placeholder || '', class: 'ta', oninput: (e) => { obj[key] = e.target.value; } }, obj[key] || '')
+        : h('input', { 'aria-label': label, placeholder: placeholder || '', value: obj[key] ?? '', oninput: (e) => { obj[key] = e.target.value; } }));
+    const mode = r.response.mode;
+    return h('div', null,
+      h('h4', null, r.id ? 'Edit mock' : 'New mock'),
+      field(r, 'name', 'Name', 'e.g. Orders API fails'),
+      h('div', { class: 'row' },
+        h('div', { class: 'auto', style: 'width:90px' }, h('label', { class: 'f' }, 'Method'),
+          h('select', { 'aria-label': 'Method', onchange: (e) => { r.method = e.target.value; } },
+            METHODS.map((m) => h('option', { value: m, selected: (r.method || '') === m }, m || 'Any')))),
+        field(r, 'url', 'URL contains', '/api/orders, */orders/*, or /regex/')),
+
+      h('h4', null, 'Before it is sent (request)'),
+      field(r.request, 'headers', 'Headers to set or remove', 'Authorization: Bearer expired-token\n-X-Request-Id', 2),
+      field(r.request, 'fields', 'JSON fields to change', 'quantity = 0\nuser.role = "admin"\n-coupon', 2),
+      field(r.request, 'body', 'Replace the whole body (optional)', '', 2),
+
+      h('h4', null, 'After it is sent (response)'),
+      h('select', { 'aria-label': 'Response mode', onchange: (e) => { r.response.mode = e.target.value; render(); } },
+        [['', "Don't change the response"], ['modify', 'Change the real response'], ['replace', "Return my response (don't call the server)"], ['fail', 'Simulate a network failure']]
+          .map(([v, label]) => h('option', { value: v, selected: mode === v }, label))),
+      mode === 'fail'
+        ? h('div', null, h('label', { class: 'f' }, 'Failure'),
+          h('select', { 'aria-label': 'Failure', onchange: (e) => { r.response.failure = e.target.value; } },
+            FAILURES.map((f) => h('option', { value: f, selected: r.response.failure === f }, f))))
+        : null,
+      mode === 'modify' || mode === 'replace' ? h('div', null,
+        h('div', { class: 'row' },
+          h('div', { class: 'auto', style: 'width:110px' }, field(r.response, 'status', 'Status code', mode === 'replace' ? '200' : 'keep')),
+          h('div', { class: 'muted' }, 'e.g. 200, 401, 404, 500, 503')),
+        field(r.response, 'headers', 'Headers to set or remove', 'Content-Type: application/json\n-Cache-Control', 2),
+        field(r.response, 'fields', 'JSON fields to change', 'data.items = []\ndata.total = 0\n-data.user.email', 2),
+        field(r.response, 'body', mode === 'replace' ? 'Response body' : 'Replace the whole body (optional)', '{"error": "Service unavailable"}', 4)) : null,
+
+      h('div', { class: 'row', style: 'margin-top:6px' },
+        h('div', { class: 'auto', style: 'width:110px' }, field(r, 'delayMs', 'Delay (ms)', '0')),
+        h('label', { class: 'f auto' }, h('input', { type: 'checkbox', checked: r.once, onchange: (e) => { r.once = e.target.checked; } }), ' Only once'),
+        h('label', { class: 'f auto' }, h('input', { type: 'checkbox', checked: r.enabled, onchange: (e) => { r.enabled = e.target.checked; } }), ' On')),
+      h('div', { class: 'actions' },
+        h('button', {
+          class: 'b p', disabled: state.busy,
+          onclick: () => run(async () => {
+            const rule = {
+              ...r,
+              delayMs: r.delayMs === '' ? undefined : Number(r.delayMs),
+              response: r.response.mode ? { ...r.response, status: r.response.status === '' ? undefined : Number(r.response.status), failure: r.response.mode === 'fail' ? r.response.failure : undefined } : undefined,
+            };
+            state.mocks = await call('mockSave', { rule });
+            state.mockEdit = null;
+            flash('Mock saved', 'ok');
+          }),
+        }, 'Save mock'),
+        h('button', { class: 'b', onclick: () => { state.mockEdit = null; render(); } }, 'Cancel')));
+  }
+
+  function mockView() {
+    if (state.mockEdit) return mockEditor();
+    const m = state.mocks;
+    return h('div', null,
+      m.active ? h('div', { class: 'msg info', style: 'margin:0 0 6px' }, `${m.active} mock${m.active > 1 ? 's are' : ' is'} on. Matching API calls are being changed.`) : null,
+      h('div', { class: 'actions', style: 'margin-top:0' },
+        h('button', { class: 'b p', onclick: () => editRule(emptyRule()) }, 'New mock')),
+      m.rules.length ? h('ul', null, m.rules.map((r) => h('li', null,
+        h('input', {
+          type: 'checkbox', checked: r.enabled, title: r.enabled ? 'Turn off' : 'Turn on', 'aria-label': `Mock ${r.name} on`,
+          onchange: (e) => run(async () => { state.mocks = await call('mockToggle', { id: r.id, enabled: e.target.checked }); }),
+        }),
+        h('div', { class: 'grow' },
+          h('div', null, h('b', null, r.name), r.hits ? h('span', { class: 'muted' }, ` · used ${r.hits}×`) : null),
+          h('div', { class: 'v' }, `${r.method || 'ANY'} ${r.url} · ${ruleSummary(r)}`)),
+        h('button', { class: 'b', onclick: () => editRule(r) }, 'Edit'),
+        h('button', { class: 'b d', title: 'Delete', onclick: () => run(async () => { state.mocks = await call('mockDelete', { id: r.id }); }) }, '×')))) : h('div', { class: 'muted', style: 'margin-top:6px' }, 'No mocks yet. Pick a recent API call below, or start a new one.'),
+      h('h4', null, 'Recent API calls'),
+      m.recent.length ? h('ul', null, m.recent.slice(0, 15).map((c) => h('li', null,
+        h('div', { class: 'grow' },
+          h('div', { class: 'v', title: c.url }, `${c.method} ${pathOf(c.url)}`),
+          h('div', { class: 'muted' }, `${c.status ?? 'failed'}${c.mocked ? ` · mocked by ${c.mocked}` : ''}`)),
+        h('button', { class: 'b', onclick: () => run(async () => editRule(await call('mockFromCall', { seq: c.seq }))) }, 'Mock this')))) : h('div', { class: 'muted' }, 'API calls will appear here as the page makes them.'));
   }
 
   function toggle() {
@@ -502,9 +642,11 @@
   function render() {
     if (!root) return;
     root.replaceChildren(h('style', null, CSS));
-    root.append(h('button', { class: 'pill', title: 'QA recorder (Alt+Shift+D)', onclick: toggle }, state.open ? 'Close QA tools' : 'QA tools'));
+    const mocksOn = state.mocks.active;
+    root.append(h('button', { class: `pill${mocksOn ? ' warn' : ''}`, title: 'QA recorder (Alt+Shift+D)', onclick: toggle },
+      `${state.open ? 'Close QA tools' : 'QA tools'}${mocksOn ? ` · ${mocksOn} mock${mocksOn > 1 ? 's' : ''} on` : ''}`));
     if (!state.open) return;
-    const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['bug', 'Bug']];
+    const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['mock', 'Mock'], ['bug', 'Bug']];
     let body;
     if (!state.init) body = h('div', { class: 'muted' }, 'Loading…');
     else if (state.tab === 'faker') body = fakerView();
@@ -512,6 +654,7 @@
     else if (state.tab === 'edge') body = edgeView();
     else if (state.tab === 'profiles') body = profilesView();
     else if (state.tab === 'bug') body = bugView();
+    else if (state.tab === 'mock') body = mockView();
     else body = loopView();
     root.append(h('div', { class: 'panel', role: 'dialog', 'aria-label': 'QA recorder' },
       h('header', null, h('b', null, 'QA recorder'),
@@ -529,6 +672,11 @@
     setTarget(target) {
       state.target = target;
       render();
+    },
+    mocksChanged(mocks) {
+      state.mocks = mocks;
+      // Don't redraw under the QA while they edit a rule.
+      if (!state.mockEdit) render();
     },
     loopStatus(status) {
       state.loopStatus = status;
