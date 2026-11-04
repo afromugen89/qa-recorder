@@ -34,7 +34,14 @@ import type {
 const here = dirname(fileURLToPath(import.meta.url));
 const INJECTED_SCRIPT = readFileSync(join(here, '..', 'injected', 'recorder.js'), 'utf8');
 const PANEL_SCRIPT = readFileSync(join(here, '..', 'injected', 'panel.js'), 'utf8');
-/** Hide the panel (and check overlays) in screenshots so they show only the app. */
+/**
+ * Hide the panel (and check overlays) in bug report screenshots so they show
+ * only the app. Playwright applies this style to the live page while it
+ * captures, so the panel briefly disappears on screen. That is fine for a bug
+ * report the tester asked for, but not for the automatic screenshot after
+ * every action: it made the panel flicker on each click. Step screenshots
+ * therefore keep the panel in the picture.
+ */
 const SCREENSHOT_STYLE = 'qa-recorder-panel, qa-recorder-overlay { display: none !important; }';
 /** Accessibility and layout evidence keeps the numbered overlay boxes. */
 const AUDIT_SCREENSHOT_STYLE = 'qa-recorder-panel { display: none !important; }';
@@ -492,7 +499,7 @@ export class Recorder {
       if (this.stopped || page.isClosed()) return;
       const file = `screenshots/${String(event.seq).padStart(4, '0')}-${event.action}.png`;
       this.track(
-        page.screenshot({ path: join(this.sessionDir, file), style: SCREENSHOT_STYLE }).then(() => {
+        page.screenshot({ path: join(this.sessionDir, file) }).then(() => {
           event.screenshot = file;
           this.scheduleSave();
         }),

@@ -84,7 +84,7 @@ Primary users are QA testers. A secondary user is the automation engineer who ru
 | REC-06 | Record element details for the report: tag, type, id, name, role, accessible name and text. | Built |
 | REC-07 | Mask values typed into password fields and card fields (`autocomplete="cc-*"`) as `********` unless `--keep-secrets` is set. | Built |
 | REC-08 | Record navigations, and new tabs and popups, with a tab number (`pageId`) on every event. | Built |
-| REC-09 | Take a screenshot after each action (can be turned off). The QA tools panel is hidden from screenshots. | Built |
+| REC-09 | Take a screenshot after each action (can be turned off) without disturbing the page: the QA tools panel stays on screen and appears in these screenshots, because hiding it made it flicker on every click. Bug report screenshots hide the panel. | Built |
 | REC-10 | Never record the QA tools panel's own clicks and typing, and keep the panel invisible to Playwright locators. | Built |
 | REC-11 | Show each event live in the terminal, with failed calls, slow calls and errors highlighted. | Built |
 | REC-12 | Record as a phone or tablet using a Playwright device name (`--device "iPhone 15 Pro"`), with its size, touch, pixel ratio and user agent. `qa-recorder devices` lists the names. | Built |

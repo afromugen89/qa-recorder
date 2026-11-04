@@ -108,7 +108,7 @@ Press **Alt+Shift+D** in the page, or click the **QA tools** button at the botto
 
 The panel has nine tabs: **Faker**, **Boundaries**, **Edge cases**, **Profiles**, **Looper**, **Mock**, **Accessibility**, **Responsive** and **Bug**.
 
-The panel is part of QA Recorder, not of the site you're testing. It never appears in screenshots, your clicks in it aren't recorded as test steps, and it can't affect the site's own tests.
+The panel is part of QA Recorder, not of the site you're testing. It's left out of the bug report screenshot (it can show in the screenshots taken after each step), your clicks in it aren't recorded as test steps, and it can't affect the site's own tests.
 
 The top of the panel shows which field values will go into. **Click into a field on the page first**, then use the panel. The panel reads the field's rules (type, `maxlength`, `min`, `max`, `required` and so on) and shows them next to the field name.
 
