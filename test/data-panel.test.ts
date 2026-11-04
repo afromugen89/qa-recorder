@@ -213,7 +213,7 @@ test('panel UI renders and is invisible to the recorder and to Playwright locato
   const tabs = await page.evaluate(() =>
     Array.from((window as any).__qaPanelUi._root.querySelectorAll('[role=tab]')).map((b: any) => b.textContent),
   );
-  assert.deepEqual(tabs, ['Faker', 'Boundaries', 'Edge cases', 'Profiles', 'Looper', 'Mock', 'Bug']);
+  assert.deepEqual(tabs, ['Faker', 'Boundaries', 'Edge cases', 'Profiles', 'Looper', 'Mock', 'Accessibility', 'Responsive', 'Bug']);
 
   // Click the Edge cases tab inside the panel.
   await page.evaluate(() => {

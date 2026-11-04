@@ -1,6 +1,9 @@
 import { ISTQB_TECHNIQUES, techniqueName, type TechniqueId } from '../data/techniques.js';
+import { a11ySummary, type A11yRule } from '../audit/a11y.js';
+import { layoutSummary, type ViewportResult } from '../audit/layout.js';
 import type {
-  ActionEvent, ConsoleEvent, LoopEvent, NavigationEvent, NetworkEvent, PageErrorEvent, SessionData, TimelineEvent,
+  A11yEvent, ActionEvent, ConsoleEvent, LayoutEvent, LoopEvent, NavigationEvent, NetworkEvent, PageErrorEvent, SessionData,
+  TimelineEvent, ViewportEvent,
 } from '../recorder/types.js';
 
 export type Severity = 'critical' | 'major' | 'minor' | 'trivial';
@@ -61,6 +64,29 @@ export interface EndpointStats {
   maxMs: number;
 }
 
+/** One accessibility scan in the report's range. */
+export interface ReportA11yScan {
+  step?: number;
+  url: string;
+  /** e.g. "WCAG 2.2 AA". */
+  standard: string;
+  engine: string;
+  summary: string;
+  violations: A11yRule[];
+  /** Rules a person still has to check. */
+  needsReview: { id: string; help: string; nodeCount: number; wcag: string[] }[];
+  passes: number;
+  screenshot?: string;
+}
+
+/** One responsive layout check in the report's range. */
+export interface ReportLayoutCheck {
+  step?: number;
+  url: string;
+  summary: string;
+  viewports: ViewportResult[];
+}
+
 export interface BugReport {
   title: string;
   createdAt: string;
@@ -74,6 +100,10 @@ export interface BugReport {
     userAgent?: string;
     recordedAt: string;
     dataSeed?: number;
+    /** Playwright device the session was recorded as. */
+    device?: string;
+    /** Tab size: the recording's starting size, or the last size the QA resized it to. */
+    viewport?: { width: number; height: number; label?: string };
   };
   steps: ReportStep[];
   expected?: string;
@@ -87,6 +117,10 @@ export interface BugReport {
   slowThresholdMs: number;
   /** Mock rules that changed API calls in this report's range. */
   mocks: { rule: string; calls: number; changes: string[] }[];
+  /** Accessibility scans in this report's range. */
+  accessibility: ReportA11yScan[];
+  /** Responsive layout checks in this report's range. */
+  layout: ReportLayoutCheck[];
   screenshot?: string;
   /** Every event in range, for the full timeline appendix. */
   timeline: TimelineEvent[];
@@ -206,9 +240,19 @@ function shortUrl(url: string): string {
   }
 }
 
-/** Picks the ISTQB techniques that the steps' test data shows were used. */
-export function detectTechniques(actions: ActionEvent[]): BugReport['techniques'] {
+/** Picks the ISTQB techniques that the steps' test data (and any checks run) show were used. */
+export function detectTechniques(actions: ActionEvent[], checks: (A11yEvent | LayoutEvent)[] = []): BugReport['techniques'] {
   const found = new Map<TechniqueId, string[]>();
+  const note = (id: TechniqueId, label: string) => found.set(id, [...(found.get(id) ?? []), label]);
+  for (const c of checks) {
+    if (c.type === 'a11y') note('checklist-based-testing', `${c.result.standard} checklist (${c.result.engine})`);
+    else {
+      const sized = c.result.viewports.filter((v) => !v.boundary);
+      if (sized.length) note('checklist-based-testing', `responsive layout checklist at ${sized.map((v) => `${v.width}px`).join(', ')}`);
+      const edges = c.result.viewports.filter((v) => v.boundary).map((v) => v.width);
+      if (edges.length) note('boundary-value-analysis', `CSS breakpoint widths ${edges.join(', ')} px`);
+    }
+  }
   for (const a of actions) {
     const t = a.testData?.technique;
     if (!t) continue;
@@ -253,6 +297,19 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
         stepOfSeq.set(e.seq, step.number);
         lastUrl = e.url;
       }
+      continue;
+    }
+    if (e.type === 'a11y' || e.type === 'layout' || e.type === 'viewport') {
+      const step: ReportStep = { number: steps.length + 1, text: describeCheck(e), seqs: [e.seq] };
+      if (e.type === 'a11y') {
+        step.detail = a11ySummary(e.result);
+        step.technique = 'checklist-based-testing';
+      } else if (e.type === 'layout') {
+        step.detail = layoutSummary(e.result);
+        step.technique = e.result.viewports.some((v) => v.boundary) ? 'boundary-value-analysis' : 'checklist-based-testing';
+      }
+      steps.push(step);
+      stepOfSeq.set(e.seq, step.number);
       continue;
     }
     if (e.type === 'navigation' && e.newPage) {
@@ -300,6 +357,22 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
   return { steps, stepOfSeq };
 }
 
+/** Plain-English step for a check or a resize. */
+export function describeCheck(e: A11yEvent | LayoutEvent | ViewportEvent): string {
+  switch (e.type) {
+    case 'a11y':
+      return `Run an accessibility check (${e.result.standard}) on ${shortUrl(e.url)}`;
+    case 'layout': {
+      const sizes = e.result.viewports.map((v) => (v.fresh ? `${v.width}×${v.height}` : 'the current tab'));
+      return `Check the responsive layout of ${shortUrl(e.url)} at ${sizes.join(', ')}`;
+    }
+    case 'viewport':
+      return e.reset
+        ? `Resize the browser view back to ${e.width}×${e.height}`
+        : `Resize the browser view to ${e.width}×${e.height}${e.label ? ` (${e.label})` : ''}`;
+  }
+}
+
 /** The step during or just before an event. */
 function stepAt(seqOrTime: { seq: number; timestamp: number; triggeredBy?: number }, events: TimelineEvent[], stepOfSeq: Map<number, number>) {
   if (seqOrTime.triggeredBy !== undefined && stepOfSeq.has(seqOrTime.triggeredBy)) return stepOfSeq.get(seqOrTime.triggeredBy);
@@ -312,7 +385,29 @@ function stepAt(seqOrTime: { seq: number; timestamp: number; triggeredBy?: numbe
   return found;
 }
 
-function suggestTitle(failed: ReportApiCall[], pageErrors: PageErrorEvent[], consoleErrors: ConsoleEvent[], slow: ReportApiCall[], steps: ReportStep[]): string {
+function checkTitle(a11y: ReportA11yScan[], layout: ReportLayoutCheck[]): string | undefined {
+  const scan = [...a11y].reverse().find((s) => s.violations.length);
+  if (scan) {
+    const worst = scan.violations[0];
+    const more = scan.violations.length > 1 ? ` and ${scan.violations.length - 1} more ${scan.standard} issue${scan.violations.length > 2 ? 's' : ''}` : '';
+    return `Accessibility: ${worst.help} (${worst.nodeCount} element${worst.nodeCount > 1 ? 's' : ''})${more} on ${shortUrl(scan.url)}`;
+  }
+  for (const check of [...layout].reverse()) {
+    const v = check.viewports.find((x) => x.issues.some((i) => i.severity === 'error'));
+    if (v) {
+      const issue = v.issues.find((i) => i.severity === 'error')!;
+      const what = issue.kind === 'horizontal-scroll' ? 'page scrolls sideways'
+        : issue.kind === 'overlap' ? 'tap targets overlap'
+        : issue.kind === 'zoom-disabled' ? 'pinch zoom is blocked'
+        : issue.kind === 'meta-viewport' ? 'no viewport meta tag'
+        : 'content sticks out of the screen';
+      return `Layout at ${v.width}×${v.height}${v.device ? ` (${v.device})` : ''}: ${what} on ${shortUrl(check.url)}`;
+    }
+  }
+  return undefined;
+}
+
+function suggestTitle(failed: ReportApiCall[], pageErrors: PageErrorEvent[], consoleErrors: ConsoleEvent[], slow: ReportApiCall[], steps: ReportStep[], checks?: string): string {
   const stepText = (n?: number) => {
     const s = steps.find((x) => x.number === n);
     if (!s) return '';
@@ -325,12 +420,17 @@ function suggestTitle(failed: ReportApiCall[], pageErrors: PageErrorEvent[], con
     return `${serverError.method} ${shortUrl(serverError.url)} ${what}${stepText(serverError.step)}`;
   }
   if (pageErrors.length) return `Uncaught error: ${pageErrors[0].message.slice(0, 80)}`;
+  // A check the QA ran on purpose matters more than background console noise.
+  if (checks) return checks;
   if (consoleErrors.length) return `Console error: ${consoleErrors[0].text.slice(0, 80)}`;
   if (slow.length) return `${slow[0].method} ${shortUrl(slow[0].url)} takes ${slow[0].durationMs} ms${stepText(slow[0].step)}`;
   return 'Untitled bug';
 }
 
-function suggestActual(failed: ReportApiCall[], pageErrors: { message: string }[], consoleErrors: { text: string }[], slow: ReportApiCall[], threshold: number): string {
+function suggestActual(
+  failed: ReportApiCall[], pageErrors: { message: string }[], consoleErrors: { text: string }[], slow: ReportApiCall[], threshold: number,
+  a11y: ReportA11yScan[] = [], layout: ReportLayoutCheck[] = [],
+): string {
   const lines: string[] = [];
   for (const c of failed.slice(0, 5)) {
     const body = c.responseBody ? `: ${c.responseBody.replace(/\s+/g, ' ').slice(0, 120)}` : '';
@@ -340,6 +440,20 @@ function suggestActual(failed: ReportApiCall[], pageErrors: { message: string }[
   }
   for (const e of pageErrors.slice(0, 3)) lines.push(`Uncaught JavaScript error: ${e.message}`);
   for (const e of consoleErrors.slice(0, 3)) lines.push(`Console error: ${e.text.slice(0, 200)}`);
+  for (const scan of a11y) {
+    if (!scan.violations.length) continue;
+    lines.push(`Accessibility check (${scan.standard}) on ${shortUrl(scan.url)}: ${scan.summary}.`);
+    for (const v of scan.violations.slice(0, 3)) {
+      lines.push(`- ${v.help} (${v.impact ?? 'minor'}${v.wcag.length ? `, WCAG ${v.wcag.join(', ')}` : ''}): ${v.nodeCount} element${v.nodeCount > 1 ? 's' : ''}, e.g. ${v.nodes[0]?.selector ?? ''}`);
+    }
+  }
+  for (const check of layout) {
+    for (const v of check.viewports) {
+      const problems = v.issues.filter((i) => i.severity === 'error').slice(0, 2);
+      if (!problems.length) continue;
+      lines.push(`At ${v.width}×${v.height}${v.device ? ` (${v.device})` : ''}: ${problems.map((p) => p.message).join(' ')}`);
+    }
+  }
   for (const c of slow.slice(0, 3)) lines.push(`${c.method} ${shortUrl(c.url)} took ${c.durationMs} ms (threshold ${threshold} ms).`);
   return lines.length ? lines.join('\n') : 'Describe what happened.';
 }
@@ -373,7 +487,30 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
   const pageErrors = pageErrorEvents.map((e) => ({ step: stepAt(e, events, stepOfSeq), message: e.message, stack: e.stack }));
   const actions = events.filter((e): e is ActionEvent => e.type === 'action');
 
-  const detected = detectTechniques(actions);
+  const checkEvents = events.filter((e): e is A11yEvent | LayoutEvent => e.type === 'a11y' || e.type === 'layout');
+  const accessibility: ReportA11yScan[] = checkEvents.filter((e): e is A11yEvent => e.type === 'a11y').map((e) => ({
+    step: stepOfSeq.get(e.seq),
+    url: e.url,
+    standard: e.result.standard,
+    engine: e.result.engine,
+    summary: a11ySummary(e.result),
+    violations: e.result.violations,
+    needsReview: e.result.needsReview.map((r) => ({ id: r.id, help: r.help, nodeCount: r.nodeCount, wcag: r.wcag })),
+    passes: e.result.passes,
+    screenshot: e.screenshot,
+  }));
+  const layout: ReportLayoutCheck[] = checkEvents.filter((e): e is LayoutEvent => e.type === 'layout').map((e) => ({
+    step: stepOfSeq.get(e.seq),
+    url: e.url,
+    summary: layoutSummary(e.result),
+    viewports: e.result.viewports,
+  }));
+  const lastResize = session.events.filter((e): e is ViewportEvent => e.type === 'viewport' && e.seq <= to).at(-1);
+  const viewport = lastResize && !lastResize.reset
+    ? { width: lastResize.width, height: lastResize.height, ...(lastResize.label && { label: lastResize.label }) }
+    : session.meta.viewport;
+
+  const detected = detectTechniques(actions, checkEvents);
   const techniques = input.techniques?.length
     ? input.techniques
         .filter((id) => id in ISTQB_TECHNIQUES)
@@ -388,7 +525,7 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
   const startUrl = firstNav?.url ?? session.meta.startUrl;
 
   return {
-    title: input.title?.trim() || suggestTitle(failedApiCalls, pageErrorEvents, errorConsole, slowApiCalls, steps),
+    title: input.title?.trim() || suggestTitle(failedApiCalls, pageErrorEvents, errorConsole, slowApiCalls, steps, checkTitle(accessibility, layout)),
     createdAt: new Date().toISOString(),
     severity: input.severity,
     priority: input.priority,
@@ -400,10 +537,12 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
       userAgent: session.meta.userAgent,
       recordedAt: session.meta.startedAt,
       dataSeed: session.meta.dataSeed,
+      ...(session.meta.device && { device: session.meta.device }),
+      ...(viewport && { viewport }),
     },
     steps,
     expected: input.expected?.trim() || undefined,
-    actual: input.actual?.trim() || suggestActual(failedApiCalls, pageErrorEvents, errorConsole, slowApiCalls, session.meta.slowThresholdMs),
+    actual: input.actual?.trim() || suggestActual(failedApiCalls, pageErrorEvents, errorConsole, slowApiCalls, session.meta.slowThresholdMs, accessibility, layout),
     notes: input.notes?.trim() || undefined,
     failedApiCalls,
     slowApiCalls,
@@ -412,6 +551,8 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     apiPerformance: apiPerformance(network),
     slowThresholdMs: session.meta.slowThresholdMs,
     mocks: summarizeMocks(network),
+    accessibility,
+    layout,
     screenshot: input.screenshot,
     timeline: events,
   };
@@ -442,5 +583,7 @@ export function bugDraft(session: SessionData, fromSeq = 0) {
     consoleErrors: report.consoleErrors.filter((e) => e.level === 'error').length,
     pageErrors: report.pageErrors.length,
     mockedCalls: report.mocks.reduce((sum, m) => sum + m.calls, 0),
+    a11yViolations: report.accessibility.reduce((sum, s) => sum + s.violations.length, 0),
+    layoutIssues: report.layout.reduce((sum, c) => sum + c.viewports.reduce((n, v) => n + v.issues.length, 0), 0),
   };
 }
