@@ -9,7 +9,7 @@ A recording browser for QA. Open a site, test it by hand, and qa-recorder captur
 
 Each API call is linked to the user action that triggered it, so a report can say "Clicking *Save* sent `POST /api/orders`, which returned 500 in 1.2 s".
 
-New to QA Recorder? Read the **[user guide](docs/USER_GUIDE.md)** for a step-by-step walkthrough.
+New to QA Recorder? Read the **[user guide](docs/USER_GUIDE.md)** for a step-by-step walkthrough. The **[specification](docs/SPECIFICATION.md)** lists every requirement and whether it is built.
 
 ## Setup
 
