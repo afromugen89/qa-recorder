@@ -148,7 +148,7 @@ async function record(argv: string[]): Promise<void> {
     },
   });
 
-  console.log(`Test data panel: press Alt+Shift+D in the page, or click "Test data" (seed ${recorder.data.generator.seed}).`);
+  console.log(`Test data panel: press Alt+Shift+D in the page, or click "QA tools" (seed ${recorder.data.generator.seed}).`);
   const activeMocks = recorder.mocks.activeCount();
   if (activeMocks) console.log(color(33)(`${activeMocks} API mock${activeMocks > 1 ? 's are' : ' is'} on (from ${relative(process.cwd(), recorder.mocks.state().path)}).`));
   console.log(`Recording. Close the browser or press Ctrl+C to stop.\nSaving to ${relative(process.cwd(), recorder.sessionDir) || '.'}\n`);
