@@ -13,11 +13,13 @@ This guide is for testers using the app. For how it works inside, see the [READM
 5. [Fill fields with test data](#5-fill-fields-with-test-data)
 6. [Repeat a flow with the Looper](#6-repeat-a-flow-with-the-looper)
 7. [Mock API calls](#7-mock-api-calls)
-8. [Write a bug report](#8-write-a-bug-report)
-9. [Find your recordings](#9-find-your-recordings)
-10. [Test data in the terminal](#10-test-data-in-the-terminal)
-11. [Playwright scripts](#11-playwright-scripts)
-12. [Tips and troubleshooting](#12-tips-and-troubleshooting)
+8. [Check accessibility](#8-check-accessibility)
+9. [Check responsive layout and mobile view](#9-check-responsive-layout-and-mobile-view)
+10. [Write a bug report](#10-write-a-bug-report)
+11. [Find your recordings](#11-find-your-recordings)
+12. [Test data in the terminal](#12-test-data-in-the-terminal)
+13. [Playwright scripts](#13-playwright-scripts)
+14. [Tips and troubleshooting](#14-tips-and-troubleshooting)
 
 ---
 
@@ -81,6 +83,7 @@ Put options after the `--`, for example `npm run record -- https://your-app.exam
 | `--mocks <file>` | Use a different mock rules file. Default `.qa-recorder/mocks.json`. |
 | `--profiles <file>` | Use a different data profiles file. Default `.qa-recorder/profiles.json`. |
 | `--executable <path>` | Use your own Chrome or Chromium instead of the bundled one. |
+| `--device <name>` | Record as a phone or tablet, for example `"iPhone 15 Pro"` or `"Pixel 7"`. See [section 9](#9-check-responsive-layout-and-mobile-view). |
 | `--headless` | Run with no window (for CI). |
 
 Run `npx qa-recorder record --help` to see them all.
@@ -103,7 +106,7 @@ You don't need to do anything special. Everything below is captured as you test.
 
 Press **Alt+Shift+D** in the page, or click the **QA tools** button at the bottom right. Press it again or click **Close QA tools** to hide it.
 
-The panel has seven tabs: **Faker**, **Boundaries**, **Edge cases**, **Profiles**, **Looper**, **Mock** and **Bug**.
+The panel has nine tabs: **Faker**, **Boundaries**, **Edge cases**, **Profiles**, **Looper**, **Mock**, **Accessibility**, **Responsive** and **Bug**.
 
 The panel is part of QA Recorder, not of the site you're testing. It never appears in screenshots, your clicks in it aren't recorded as test steps, and it can't affect the site's own tests.
 
@@ -226,7 +229,102 @@ While any mock is on, the **QA tools** button turns orange and shows how many ar
 
 Rules are saved to `.qa-recorder/mocks.json` and stay there between recordings. Commit or share that file and your team gets the same mocks. **Remember to turn mocks off** when you go back to normal testing.
 
-## 8. Write a bug report
+## 8. Check accessibility
+
+The **Accessibility** tab checks the page against WCAG with [axe-core](https://github.com/dequelabs/axe-core), the engine behind most accessibility testing tools.
+
+![Accessibility tab](images/panel-a11y.png)
+
+1. Get the page into the state you want to check. The scan looks at the page **as it is now**, so open menus, dialogs, dropdowns and error messages first if you want them checked too.
+2. Choose the **WCAG version** (2.0, 2.1 or 2.2) and **Level** (A, AA or AAA). Most legal requirements and company policies ask for **WCAG 2.1 AA** or **2.2 AA**. Each version includes the ones before it, and each level includes the levels below it.
+3. Tick **Include best practices** if you also want axe-core's advice that isn't a WCAG failure (for example "page should have one main landmark").
+4. Click **Scan this page**.
+
+The result lists every rule that failed, worst first, with:
+
+- **Impact**: critical, serious, moderate or minor
+- The **WCAG success criterion** and level, for example *1.4.3 (AA)* for colour contrast
+- How many elements fail. Click **Elements** to see each one and the fix axe-core suggests, then **Show** to scroll the page to it and outline it in red.
+
+**Needs a manual check** lists rules axe-core couldn't decide on its own, for example contrast on text over an image. Look at those yourself.
+
+Each scan is saved to the recording with a screenshot of the page where every failing element has a numbered box (the numbers match the list). Scans are checked inside iframes too, including iframes from another domain, and inside open shadow DOM.
+
+> Automated checks find a lot, but not everything. Also test with the keyboard only (Tab, Shift+Tab, Enter, Space, Esc) and, if you can, with a screen reader.
+
+Tagged as: **Checklist-based testing** (the WCAG checklist).
+
+## 9. Check responsive layout and mobile view
+
+The **Responsive** tab checks how the page looks on phones, tablets and desktops, and lets you test the page by hand at a phone size.
+
+![Responsive tab](images/panel-responsive.png)
+
+### Check the layout at several sizes
+
+1. Tick the sizes to check. Phones (Galaxy S9+ 320 px, iPhone SE 375, iPhone 15 Pro 393, Pixel 7 412), tablets (iPad Mini 768, iPad Pro 11 834) and desktops (Laptop 1366, Desktop 1920). Four are ticked by default.
+2. Add **Extra widths** if you need others, for example `360, 1024`.
+3. Tick **Landscape** to turn the phones and tablets sideways.
+4. Leave **This tab as it is now** ticked to also check the page exactly as you have it (with any open dialog or filled form).
+5. Click **Run layout check**.
+
+Each size loads the current URL in a hidden browser, as that real device: correct screen size, touch, pixel ratio and phone user agent. It uses your cookies and local storage, so you stay logged in. Your own tab isn't touched, and these page loads are not added to your recording.
+
+At every size it looks for:
+
+| Check | Severity |
+| --- | --- |
+| The page scrolls sideways (content wider than the screen), and which elements stick out | Error |
+| Content that sticks out and is cut off | Warning |
+| Tap targets (buttons, links, fields) that overlap each other | Error, phones and tablets |
+| Tap targets smaller than 24×24 px that are crowded by other targets (WCAG 2.5.8) | Warning, phones and tablets |
+| Text smaller than 12 px | Warning, phones and tablets |
+| No `<meta name="viewport">` tag, so phones show the desktop page zoomed out | Error, phones and tablets |
+| Pinch zoom blocked (`user-scalable=no` or `maximum-scale` below 2, WCAG 1.4.4) | Error, phones and tablets |
+
+Click **Details** next to a size to see its issues. Each size gets a screenshot (the full width, so sideways overflow shows, and up to three screens tall; tick **Full-page screenshots** for the whole page) with numbered boxes on the problem elements:
+
+![Layout check screenshot at 375 px](images/layout-phone.png)
+
+### Test both sides of each CSS breakpoint
+
+A layout usually breaks right where it switches, for example at 767 px and 768 px. Click **Find breakpoints** and QA Recorder reads the page's CSS `@media` rules (including stylesheets from other domains) and adds, for each breakpoint, the last width before the switch and the first width after it. Untick any you don't need, then run the check.
+
+Tagged as: **Boundary value analysis** for breakpoint widths, **Checklist-based testing** for the other sizes.
+
+### Test by hand at a phone size
+
+Under **Resize this tab**, pick a device and click **Resize**. The page shrinks to that size and you can keep testing (open the menu, fill the form, and so on). Click **Restore** to go back. Resizing is recorded as a step, so the bug report says *"Resize the browser view to 375×667 (iPhone SE (3rd gen))"*.
+
+Resizing only changes the size. For a true phone, with touch events, the phone's pixel ratio and user agent, start the whole recording as that device:
+
+```bash
+npm run record -- https://your-app.example.com --device "iPhone 15 Pro"
+```
+
+Run `npx qa-recorder devices` to list the device names.
+
+### Run the checks without a window (CI)
+
+`check` opens a URL without a window, runs the accessibility scan and the layout check, writes a bug report and exits with code 1 if anything failed:
+
+```bash
+npx qa-recorder check https://your-app.example.com/checkout --wcag 2.2 --level AA --breakpoints
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--wcag 2.0\|2.1\|2.2`, `--level A\|AA\|AAA` | Standard to check. Default WCAG 2.2 AA. |
+| `--best-practices` | Also run best-practice rules. |
+| `--sizes <ids>` | Comma-separated sizes from `qa-recorder devices`, for example `"iPhone SE (3rd gen),laptop"`. |
+| `--widths <px,px>` | Extra widths. |
+| `--breakpoints` | Also check both sides of each CSS breakpoint. |
+| `--no-a11y`, `--no-layout` | Skip one of the checks. |
+| `--device <name>` | Load the page as this device for the accessibility scan. |
+
+`check` loads the page fresh with no login. For pages behind a login, record by hand and use the panel.
+
+## 10. Write a bug report
 
 ### From the panel (recommended)
 
@@ -253,9 +351,11 @@ If you keep testing and find a second bug, the Bug tab lets you choose **Whole s
 | Used the Edge cases tab | Error guessing |
 | Used Faker or Profiles | Random testing |
 | Ran the Looper | Use case testing |
+| Ran an accessibility scan, or a layout check at device sizes | Checklist-based testing |
+| Checked CSS breakpoint widths | Boundary value analysis |
 | Used none of the data tools | Exploratory testing |
 
-Decision table testing, state transition testing and checklist-based testing can't be detected from the recording, so tick them yourself when they apply.
+Decision table testing and state transition testing can't be detected from the recording, so tick them yourself when they apply.
 
 ### What's in the report
 
@@ -269,7 +369,7 @@ Each report is saved in `recordings/<session>/bugs/<nn>-<title>/` as three files
 
 A report contains:
 
-- Environment: start URL, browser and user agent, when it was recorded, and the test data seed
+- Environment: start URL, browser and user agent, when it was recorded, the test data seed, and the device and viewport size if you used `--device` or resized the tab
 - Numbered **steps to reproduce** in plain English, with the test data and technique for each generated value and whether it was expected to be valid or invalid
 - Expected and actual results
 - The ISTQB technique and why it was chosen
@@ -278,7 +378,11 @@ A report contains:
 - Console and JavaScript errors, linked to the step that caused them
 - **API response times per endpoint**: number of calls, errors, average, p95 and max
 - Screenshots and the full timeline
+- **Accessibility** results for each scan: the WCAG standard, every failed rule with impact, success criterion, affected elements and a *How to fix* link, the items that need a manual check, and the screenshot with numbered boxes
+- **Responsive layout** results for each check: a row per size with its errors and warnings, and the screenshot for each size
 - A warning if any mocks were active
+
+If the only problems are from a scan or layout check, the suggested title says so, for example `Accessibility: Images must have alternative text (2 elements) and 3 more WCAG 2.2 AA issues on /checkout`.
 
 ### From the terminal, after recording
 
@@ -300,7 +404,7 @@ npx qa-recorder report recordings/2026-11-04_09-15-02 \
 | `--reporter <name>` | Your name on the report. |
 | `--from-seq <n>`, `--to-seq <n>` | Only include part of the timeline. |
 
-## 9. Find your recordings
+## 11. Find your recordings
 
 Each recording is saved in its own timestamped folder:
 
@@ -308,14 +412,14 @@ Each recording is saved in its own timestamped folder:
 recordings/2026-11-04_09-15-02/
   session.json      every event in order, plus a summary
   network.har       full network log
-  screenshots/      one PNG after each action
+  screenshots/      one PNG after each action, plus a11y-*.png and layout-*.png from checks
   bugs/             bug reports written in this session
 ```
 
 - **`network.har`** opens in Chrome DevTools (Network tab, then drag the file in) or any HAR viewer.
-- **`session.json`** is the full timeline. Each event has a `type`: `action`, `network`, `console`, `pageerror`, `navigation`, `loop` or `bug`. It also holds the seed for generated data and a summary of API calls, failures, slow calls and average response time.
+- **`session.json`** is the full timeline. Each event has a `type`: `action`, `network`, `console`, `pageerror`, `navigation`, `loop`, `bug`, `a11y` (accessibility scan), `layout` (layout check) or `viewport` (tab resized). It also holds the seed for generated data and a summary of API calls, failures, slow calls and average response time.
 
-## 10. Test data in the terminal
+## 12. Test data in the terminal
 
 You can generate the same test data without opening a browser, for example to paste into a test case.
 
@@ -333,7 +437,7 @@ npx qa-recorder data edge                                       # error-guessing
 
 Boundary commands print each value with valid or invalid and its technique. Add `--seed <n>` to `data fake` to get the same values every time.
 
-## 11. Playwright scripts
+## 13. Playwright scripts
 
 QA Recorder does not export a ready-to-run Playwright test file yet. That is on the roadmap.
 
@@ -351,7 +455,7 @@ What it does today: every recorded action in `session.json` carries a Playwright
 - Locators prefer, in order: a test id (`data-testid`, `data-test`, `data-qa`, `data-cy`), role and accessible name, label, placeholder, `name`, a stable `id`, and finally a CSS path. If several elements match, `.nth()` is added.
 - Elements inside **closed** shadow DOM are recorded for the bug report, but Playwright can't reach them, so they are flagged with `"inClosedShadowDom": true`.
 
-## 12. Tips and troubleshooting
+## 14. Tips and troubleshooting
 
 - **The panel doesn't show the field I clicked.** Click directly into the input on the page (not its label) and check the field name at the top of the panel.
 - **A value was cut short.** The field has a `maxlength`. Tick **Ignore maxlength** on the Boundaries tab to send the full value.
@@ -360,4 +464,6 @@ What it does today: every recorded action in `session.json` carries a Playwright
 - **Too many yellow warnings in the terminal.** Start with `--no-warnings` to log console errors only.
 - **Everything is flagged as slow.** Raise the threshold, for example `--slow 2000`.
 - **`npx qa-recorder` says it can't find the command.** Run `npm run build` in the `qa-recorder` folder first.
+- **The accessibility scan shows nothing for a dialog.** Open the dialog first, then scan. The scan only sees what's on the page right now.
+- **A layout check size says "not checked".** That size couldn't load the URL on its own, usually because the page needs something only your tab has (for example data kept in session storage). Resize your tab to that size instead and tick **This tab as it is now**.
 - **The browser didn't open.** Run `npm run setup` to download Chromium, or point to your own browser with `--executable`.

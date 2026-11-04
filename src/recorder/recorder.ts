@@ -3,19 +3,24 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   chromium,
+  devices,
   type Browser,
+  type BrowserContextOptions,
   type BrowserContext,
   type Frame,
   type Page,
   type Request,
 } from 'playwright';
+import { AuditService } from '../audit/service.js';
 import { DataService } from '../data/service.js';
 import { MockService, type RecentCall } from '../mock/service.js';
 import { bugDraft, type BugInput } from '../report/bug.js';
 import { writeBugReport, type WrittenReport } from '../report/render.js';
 import type {
+  A11yEvent,
   ActionEvent,
   BugEvent,
+  LayoutEvent,
   LoopEvent,
   NetworkEvent,
   RecorderOptions,
@@ -23,13 +28,16 @@ import type {
   SessionSummary,
   TestDataTag,
   TimelineEvent,
+  ViewportEvent,
 } from './types.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INJECTED_SCRIPT = readFileSync(join(here, '..', 'injected', 'recorder.js'), 'utf8');
 const PANEL_SCRIPT = readFileSync(join(here, '..', 'injected', 'panel.js'), 'utf8');
-/** Hide the panel in screenshots so they show only the app. */
-const SCREENSHOT_STYLE = 'qa-recorder-panel { display: none !important; }';
+/** Hide the panel (and check overlays) in screenshots so they show only the app. */
+const SCREENSHOT_STYLE = 'qa-recorder-panel, qa-recorder-overlay { display: none !important; }';
+/** Accessibility and layout evidence keeps the numbered overlay boxes. */
+const AUDIT_SCREENSHOT_STYLE = 'qa-recorder-panel { display: none !important; }';
 /** A tagged value must show up as an action within this time to get its tag. */
 const TAG_WINDOW_MS = 5_000;
 /** Recent API calls kept in full (headers and body) for "Mock this". */
@@ -90,9 +98,11 @@ export class Recorder {
   data!: DataService;
   /** API mock rules and interception. */
   mocks!: MockService;
+  /** Accessibility scans, responsive layout checks and resizing. */
+  audit!: AuditService;
 
-  private readonly options: Required<Omit<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed'>> &
-    Pick<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed'>;
+  private readonly options: Required<Omit<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed' | 'device'>> &
+    Pick<RecorderOptions, 'url' | 'executablePath' | 'onEvent' | 'seed' | 'device'>;
   private readonly startedAt = new Date();
   private seq = 0;
   private pageIds = new WeakMap<Page, number>();
@@ -113,6 +123,7 @@ export class Recorder {
   private lastBugSeq = 0;
   private recent: RecentCall[] = [];
   private mockBroadcastTimer?: NodeJS.Timeout;
+  private initialViewport?: { width: number; height: number };
 
   constructor(options: RecorderOptions = {}) {
     this.options = {
@@ -139,8 +150,18 @@ export class Recorder {
       headless: this.options.headless,
       executablePath: this.options.executablePath,
     });
+    let emulation: BrowserContextOptions = { viewport: this.options.headless ? { width: 1280, height: 800 } : null };
+    if (this.options.device) {
+      const descriptor = devices[this.options.device];
+      if (!descriptor) {
+        await this.browser.close();
+        throw new Error(`Unknown device "${this.options.device}". Run "qa-recorder devices" to list them.`);
+      }
+      const { defaultBrowserType: _ignored, ...rest } = descriptor;
+      emulation = rest;
+    }
     this.context = await this.browser.newContext({
-      viewport: this.options.headless ? { width: 1280, height: 800 } : null,
+      ...emulation,
       recordHar: { path: join(this.sessionDir, 'network.har'), content: 'embed' },
     });
 
@@ -164,8 +185,10 @@ export class Recorder {
       log: (message) => this.push({ type: 'console', pageId: 0, level: 'warning', text: `[qa-recorder] ${message}` }),
     });
     await this.mocks.start();
+    this.audit = new AuditService(this.auditHost());
     await this.context.exposeBinding('__qaPanel', (source, command: { cmd: string; [key: string]: unknown }) => {
       if (command?.cmd?.startsWith('mock')) return this.mocks.handle(command);
+      if (AuditService.COMMANDS.has(command?.cmd)) return this.audit.handle(source.page, command);
       if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug') return this.handleBugCommand(source.page, command);
       return this.data.handle(source.page, command);
     });
@@ -178,6 +201,7 @@ export class Recorder {
     this.browser.on('disconnected', () => this.closedListeners.forEach((fn) => fn()));
 
     this.page = await this.context.newPage();
+    this.initialViewport = this.page.viewportSize() ?? undefined;
     this.userAgent = await this.page.evaluate(() => navigator.userAgent).catch(() => undefined);
     if (this.options.url) {
       await this.page.goto(this.options.url).catch((error: Error) => {
@@ -218,6 +242,8 @@ export class Recorder {
         slowThresholdMs: this.options.slowThresholdMs,
         userAgent: this.userAgent,
         dataSeed: this.data?.generator.seed,
+        ...(this.options.device && { device: this.options.device }),
+        ...(this.initialViewport && { viewport: this.initialViewport }),
       },
       summary: this.summarize(),
       events: [...this.events].sort((a, b) => a.timestamp - b.timestamp || a.seq - b.seq),
@@ -298,6 +324,7 @@ export class Recorder {
       /* page already closed */
     }
     if (this.saveTimer) clearTimeout(this.saveTimer);
+    await this.audit?.close();
     // Closing the context writes the HAR file.
     await this.context.close().catch(() => undefined);
     await this.browser.close().catch(() => undefined);
@@ -593,6 +620,19 @@ export class Recorder {
     if (!expected) return undefined;
     this.expectedTags.delete(key);
     return Date.now() - expected.at <= TAG_WINDOW_MS ? expected.tag : undefined;
+  }
+
+  private auditHost() {
+    return {
+      sessionDir: this.sessionDir,
+      executablePath: this.options.executablePath,
+      screenshotStyle: AUDIT_SCREENSHOT_STYLE,
+      nextSeq: () => this.seq + 1,
+      pageIdOf: (page: Page) => this.pageId(page),
+      pushA11y: (event: Omit<A11yEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>) => this.push<A11yEvent>({ type: 'a11y', ...event }),
+      pushLayout: (event: Omit<LayoutEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>) => this.push<LayoutEvent>({ type: 'layout', ...event }),
+      pushViewport: (event: Omit<ViewportEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>) => this.push<ViewportEvent>({ type: 'viewport', ...event }),
+    };
   }
 
   private dataHost() {

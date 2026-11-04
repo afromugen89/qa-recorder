@@ -25,6 +25,11 @@
     lastBug: null,
     mocks: { rules: [], active: 0, recent: [] },
     mockEdit: null,
+    a11y: { options: { version: '2.2', level: 'AA', bestPractices: false }, scan: null, expanded: {} },
+    rwd: {
+      init: null, presets: null, landscape: false, widths: '', current: true, fullPage: false,
+      boundaries: null, picked: {}, check: null, expanded: {}, resizeTo: 'iPhone SE (3rd gen)', resized: null,
+    },
     message: null,
     busy: false,
   };
@@ -104,8 +109,8 @@
     header b { font-size: 14px; }
     .target { padding: 8px 12px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; font-size: 12px; color: #374151; }
     .target code { background: #eef2ff; padding: 1px 4px; border-radius: 4px; }
-    .tabs { display: flex; border-bottom: 1px solid #e5e7eb; }
-    .tabs button { flex: 1; border: 0; background: none; padding: 8px 4px; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; }
+    .tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid #e5e7eb; }
+    .tabs button { flex: 1 0 auto; border: 0; background: none; padding: 7px 6px; cursor: pointer; font-size: 12px; color: #6b7280; border-bottom: 2px solid transparent; }
     .tabs button.on { color: #111827; border-bottom-color: #4f46e5; font-weight: 600; }
     .body { padding: 10px 12px; overflow: auto; flex: 1; }
     label.f { display: block; margin: 6px 0 2px; font-size: 12px; color: #374151; }
@@ -127,6 +132,13 @@
     .valid { background: #dcfce7; color: #166534; }
     .invalid { background: #fee2e2; color: #991b1b; }
     .tech { background: #eef2ff; color: #3730a3; }
+    .imp-critical, .imp-serious, .sev-error { background: #fee2e2; color: #991b1b; }
+    .imp-moderate, .sev-warning { background: #fef3c7; color: #92400e; }
+    .imp-minor { background: #dbeafe; color: #1e40af; }
+    .ok-badge { background: #dcfce7; color: #166534; }
+    .issue { font-size: 12px; color: #374151; padding: 3px 0; }
+    .grp { font-size: 11px; color: #6b7280; margin: 6px 0 2px; }
+    .checks label { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; margin: 2px 10px 2px 0; }
     .msg { margin: 8px 12px; padding: 6px 8px; border-radius: 6px; font-size: 12px; }
     .msg.info { background: #eff6ff; color: #1e40af; }
     .msg.error { background: #fef2f2; color: #991b1b; }
@@ -155,6 +167,7 @@
     state.target = state.init.target;
     state.capture = state.init.capture;
     state.mocks = await call('mockState');
+    await ensureRwd();
   }
 
   // ---------- mocks ----------
@@ -288,6 +301,182 @@
           h('div', { class: 'v', title: c.url }, `${c.method} ${pathOf(c.url)}`),
           h('div', { class: 'muted' }, `${c.status ?? 'failed'}${c.mocked ? ` · mocked by ${c.mocked}` : ''}`)),
         h('button', { class: 'b', onclick: () => run(async () => editRule(await call('mockFromCall', { seq: c.seq }))) }, 'Mock this')))) : h('div', { class: 'muted' }, 'API calls will appear here as the page makes them.'));
+  }
+
+  // ---------- accessibility ----------
+
+  function a11yView() {
+    const a = state.a11y;
+    const o = a.options;
+    const scan = a.scan;
+    return h('div', null,
+      h('div', { class: 'muted' }, 'Checks the page as it is now with axe-core. Open menus, dialogs and error states first to check them too.'),
+      h('div', { class: 'row', style: 'margin-top:6px' },
+        h('div', null, h('label', { class: 'f' }, 'WCAG version'),
+          h('select', { 'aria-label': 'WCAG version', onchange: (e) => { o.version = e.target.value; } },
+            ['2.0', '2.1', '2.2'].map((v) => h('option', { value: v, selected: o.version === v }, `WCAG ${v}`)))),
+        h('div', null, h('label', { class: 'f' }, 'Level'),
+          h('select', { 'aria-label': 'WCAG level', onchange: (e) => { o.level = e.target.value; } },
+            ['A', 'AA', 'AAA'].map((v) => h('option', { value: v, selected: o.level === v }, v))))),
+      h('label', { class: 'f' },
+        h('input', { type: 'checkbox', checked: o.bestPractices, onchange: (e) => { o.bestPractices = e.target.checked; } }),
+        ' Include best practices (not WCAG failures)'),
+      h('div', { class: 'actions' },
+        h('button', {
+          class: 'b p', disabled: state.busy,
+          onclick: () => run(async () => {
+            a.scan = await call('a11yScan', { options: { ...o } });
+            a.expanded = {};
+          }),
+        }, scan ? 'Scan again' : 'Scan this page')),
+      scan ? a11yResults(scan) : null);
+  }
+
+  function a11yResults(scan) {
+    const r = scan.result;
+    const a = state.a11y;
+    return h('div', null,
+      h('div', { class: `msg ${r.violations.length ? 'error' : 'ok'}`, style: 'margin:8px 0 0' }, scan.summary),
+      h('div', { class: 'muted', style: 'margin-top:4px' },
+        `${r.passes} rules passed, ${r.needsReview.length} need a manual check. Added to the next bug report.`),
+      r.violations.length ? h('ul', null, r.violations.map((v, i) => h('li', { style: 'display:block' },
+        h('div', { class: 'row' },
+          h('div', { class: 'grow' },
+            h('div', null, h('b', null, `${i + 1}. `), v.help, ' ',
+              h('span', { class: `badge imp-${v.impact || 'minor'}` }, v.impact || 'minor')),
+            h('div', { class: 'muted' }, `${v.wcag.length ? `WCAG ${v.wcag.join(', ')} (${v.level})` : 'Best practice'} · ${v.nodeCount} element${v.nodeCount > 1 ? 's' : ''} · ${v.id}`)),
+          h('button', { class: 'b auto', onclick: () => { a.expanded[v.id] = !a.expanded[v.id]; render(); } }, a.expanded[v.id] ? 'Hide' : 'Elements')),
+        a.expanded[v.id] ? h('ul', null, v.nodes.map((n) => h('li', null,
+          h('div', { class: 'grow' },
+            h('div', { class: 'v', title: n.html }, n.selector),
+            n.summary ? h('div', { class: 'muted' }, n.summary.split('\n').map((l) => l.trim()).filter((l) => l && !/^Fix (any|all) of the following/i.test(l)).slice(0, 2).join('; ')) : null),
+          h('button', {
+            class: 'b auto', title: 'Scroll to it and outline it',
+            onclick: () => run(async () => {
+              const found = await call('a11yShow', { target: n.target, label: String(i + 1) });
+              if (!found) flash('That element is not on the page any more', 'info');
+            }),
+          }, 'Show')))) : null))) : null,
+      r.needsReview.length ? h('div', null,
+        h('h4', null, 'Needs a manual check'),
+        h('ul', null, r.needsReview.map((v) => h('li', null,
+          h('span', { class: 'grow' }, v.help, ' ', h('span', { class: 'muted' }, `(${v.nodeCount})`)))))) : null,
+      scan.screenshot ? h('div', { class: 'muted', style: 'margin-top:6px' }, `Screenshot with issues outlined: ${scan.screenshot}`) : null);
+  }
+
+  // ---------- responsive ----------
+
+  async function ensureRwd() {
+    const r = state.rwd;
+    if (r.init) return;
+    r.init = await call('auditInit');
+    if (!r.presets) r.presets = Object.fromEntries(r.init.presets.map((p) => [p.id, r.init.defaults.includes(p.id)]));
+    if (r.init.resized) r.resized = { label: 'custom size' };
+  }
+
+  function rwdView() {
+    const r = state.rwd;
+    if (!r.init) return h('div', { class: 'muted' }, 'Loading…');
+    const groups = {};
+    for (const p of r.init.presets) (groups[p.group] = groups[p.group] || []).push(p);
+    const picked = (b) => r.picked[b.width] !== false;
+    return h('div', null,
+      h('h4', { style: 'margin-top:0' }, 'Resize this tab'),
+      h('div', { class: 'row' },
+        h('select', { 'aria-label': 'Resize to', onchange: (e) => { r.resizeTo = e.target.value; } },
+          r.init.presets.map((p) => h('option', { value: p.id, selected: r.resizeTo === p.id }, `${p.name} (${p.width}×${p.height})`))),
+        h('button', {
+          class: 'b auto', disabled: state.busy,
+          onclick: () => run(async () => {
+            const res = await call('resize', { preset: r.resizeTo });
+            r.resized = res;
+            flash(`Tab is now ${res.width}×${res.height}. Keep testing; it is recorded as a step.`, 'ok');
+          }),
+        }, 'Resize'),
+        r.resized ? h('button', {
+          class: 'b auto', disabled: state.busy,
+          onclick: () => run(async () => { await call('resize', { reset: true }); r.resized = null; flash('Back to the original size', 'ok'); }),
+        }, 'Restore') : null),
+      h('div', { class: 'muted', style: 'margin-top:4px' }, 'Changes the page size only. For a real phone (touch, user agent, pixel ratio) record with --device.'),
+
+      h('h4', null, 'Check the layout at these sizes'),
+      h('div', { class: 'checks' }, Object.entries(groups).map(([group, list]) => h('div', null,
+        h('div', { class: 'grp' }, group),
+        list.map((p) => h('label', null,
+          h('input', { type: 'checkbox', checked: r.presets[p.id], onchange: (e) => { r.presets[p.id] = e.target.checked; } }),
+          `${p.name} ${p.width}`))))),
+      h('div', { class: 'row', style: 'margin-top:4px' },
+        h('div', null, h('label', { class: 'f' }, 'Extra widths (px)'),
+          h('input', { 'aria-label': 'Extra widths', placeholder: 'e.g. 360, 1024', value: r.widths, oninput: (e) => { r.widths = e.target.value; } }))),
+      h('div', { class: 'checks', style: 'margin-top:4px' },
+        h('label', null, h('input', { type: 'checkbox', checked: r.landscape, onchange: (e) => { r.landscape = e.target.checked; } }), 'Landscape'),
+        h('label', null, h('input', { type: 'checkbox', checked: r.current, onchange: (e) => { r.current = e.target.checked; } }), 'This tab as it is now'),
+        h('label', null, h('input', { type: 'checkbox', checked: r.fullPage, onchange: (e) => { r.fullPage = e.target.checked; } }), 'Full-page screenshots')),
+
+      h('h4', null, 'CSS breakpoints (boundary value analysis)'),
+      r.boundaries === null
+        ? h('div', null,
+          h('div', { class: 'muted' }, "Reads the page's @media rules and checks just before and just after each width where the layout switches."),
+          h('div', { class: 'actions' }, h('button', {
+            class: 'b', disabled: state.busy,
+            onclick: () => run(async () => {
+              const found = await call('breakpoints');
+              r.boundaries = found.boundaries;
+              r.picked = {};
+              if (found.unreadable.length) flash(`Could not read ${found.unreadable.length} stylesheet(s)`, 'info');
+            }),
+          }, 'Find breakpoints')))
+        : r.boundaries.length
+          ? h('div', { class: 'checks' }, r.boundaries.map((b) => h('label', { title: b.reason },
+            h('input', { type: 'checkbox', checked: picked(b), onchange: (e) => { r.picked[b.width] = e.target.checked; } }), `${b.width}`)),
+          h('div', { class: 'muted' }, `${r.boundaries.length / 2} breakpoint${r.boundaries.length > 2 ? 's' : ''} found. Hover a width to see the rule.`))
+          : h('div', { class: 'muted' }, 'No width breakpoints found in the CSS.'),
+
+      h('div', { class: 'actions' },
+        h('button', {
+          class: 'b p', disabled: state.busy,
+          onclick: () => run(async () => {
+            const request = {
+              presets: Object.entries(r.presets).filter(([, on]) => on).map(([id]) => id),
+              landscape: r.landscape,
+              widths: r.widths.split(/[\s,]+/).filter(Boolean).map(Number),
+              boundaries: (r.boundaries || []).filter(picked),
+              current: r.current,
+              fullPage: r.fullPage,
+            };
+            flash('Checking… pages load fresh at each size in a hidden browser.', 'info');
+            r.check = await call('layoutCheck', { request });
+            r.expanded = {};
+            state.message = null;
+          }),
+        }, r.check ? 'Check again' : 'Run layout check')),
+      r.check ? rwdResults(r.check) : null);
+  }
+
+  function rwdResults(check) {
+    const r = state.rwd;
+    const bad = check.result.viewports.some((v) => v.error || v.issues.some((i) => i.severity === 'error'));
+    return h('div', null,
+      h('div', { class: `msg ${bad ? 'error' : check.result.viewports.some((v) => v.issues.length) ? 'info' : 'ok'}`, style: 'margin:8px 0 0' }, check.summary),
+      h('ul', null, check.result.viewports.map((v, i) => {
+        const errors = v.issues.filter((x) => x.severity === 'error').length;
+        const warnings = v.issues.length - errors;
+        return h('li', { style: 'display:block' },
+          h('div', { class: 'row' },
+            h('div', { class: 'grow' },
+              h('div', null, h('b', null, v.label), ' ', h('span', { class: 'muted' }, v.fresh ? `${v.width}×${v.height}` : '')),
+              h('div', null,
+                v.error ? h('span', { class: 'badge sev-error' }, 'not checked') : null,
+                errors ? h('span', { class: 'badge sev-error' }, `${errors} error${errors > 1 ? 's' : ''}`) : null, ' ',
+                warnings ? h('span', { class: 'badge sev-warning' }, `${warnings} warning${warnings > 1 ? 's' : ''}`) : null,
+                !v.error && !v.issues.length ? h('span', { class: 'badge ok-badge' }, 'no issues') : null)),
+            v.issues.length || v.error ? h('button', { class: 'b auto', onclick: () => { r.expanded[i] = !r.expanded[i]; render(); } }, r.expanded[i] ? 'Hide' : 'Details') : null),
+          r.expanded[i] ? h('div', null,
+            v.error ? h('div', { class: 'issue' }, v.error) : null,
+            v.issues.map((x) => h('div', { class: 'issue' }, x.marker ? h('b', null, `[${x.marker}] `) : null, x.message)),
+            v.screenshot ? h('div', { class: 'muted' }, v.screenshot) : null) : null);
+      })),
+      h('div', { class: 'muted', style: 'margin-top:6px' }, 'Screenshots have numbered boxes on the problem elements. Added to the next bug report.'));
   }
 
   function toggle() {
@@ -599,7 +788,8 @@
       h('textarea', { 'aria-label': label, rows: rows || 3, style: 'width:100%;font:inherit;padding:5px 6px;border:1px solid #d1d5db;border-radius:6px', oninput: set(key) }, f[key]));
     return h('div', null,
       h('div', { class: 'muted' },
-        `${d.steps} steps, ${d.failedApiCalls} failed API calls, ${d.slowApiCalls} slow, ${d.consoleErrors} console errors, ${d.pageErrors} JS errors.`),
+        `${d.steps} steps, ${d.failedApiCalls} failed API calls, ${d.slowApiCalls} slow, ${d.consoleErrors} console errors, ${d.pageErrors} JS errors`
+        + `${d.a11yViolations ? `, ${d.a11yViolations} accessibility issues` : ''}${d.layoutIssues ? `, ${d.layoutIssues} layout issues` : ''}.`),
       d.hasPreviousBug ? h('div', { class: 'row', style: 'margin-top:6px' },
         h('label', { class: 'auto' }, h('input', { type: 'radio', name: 'scope', checked: f.scope === 'session',
           onchange: () => { f.scope = 'session'; run(loadBugDraft); } }), ' Whole session'),
@@ -646,7 +836,7 @@
     root.append(h('button', { class: `pill${mocksOn ? ' warn' : ''}`, title: 'QA recorder (Alt+Shift+D)', onclick: toggle },
       `${state.open ? 'Close QA tools' : 'QA tools'}${mocksOn ? ` · ${mocksOn} mock${mocksOn > 1 ? 's' : ''} on` : ''}`));
     if (!state.open) return;
-    const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['mock', 'Mock'], ['bug', 'Bug']];
+    const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['mock', 'Mock'], ['a11y', 'Accessibility'], ['rwd', 'Responsive'], ['bug', 'Bug']];
     let body;
     if (!state.init) body = h('div', { class: 'muted' }, 'Loading…');
     else if (state.tab === 'faker') body = fakerView();
@@ -655,6 +845,8 @@
     else if (state.tab === 'profiles') body = profilesView();
     else if (state.tab === 'bug') body = bugView();
     else if (state.tab === 'mock') body = mockView();
+    else if (state.tab === 'a11y') body = a11yView();
+    else if (state.tab === 'rwd') body = rwdView();
     else body = loopView();
     root.append(h('div', { class: 'panel', role: 'dialog', 'aria-label': 'QA recorder' },
       h('header', null, h('b', null, 'QA recorder'),

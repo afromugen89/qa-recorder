@@ -33,6 +33,19 @@ function handler(crossOrigin: () => string) {
         res.writeHead(200, { 'content-type': 'text/html' });
         res.end(readFileSync(join(appDir, 'data.html')));
         return;
+      case '/a11y.html':
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end(readFileSync(join(appDir, 'a11y.html'), 'utf8').replace('__CROSS_ORIGIN__', crossOrigin()));
+        return;
+      case '/a11y-frame.html':
+        res.writeHead(200, { 'content-type': 'text/html' });
+        res.end('<!doctype html><html lang="en"><body><img src="data:," width="40" height="40"><button></button></body></html>');
+        return;
+      case '/wide.css':
+        // Served from the other origin without CORS, so the page cannot read its rules.
+        res.writeHead(200, { 'content-type': 'text/css' });
+        res.end('@media (min-width: 1200px) { body { background: #fff; } }');
+        return;
       case '/frame.html':
         res.writeHead(200, { 'content-type': 'text/html' });
         res.end(readFileSync(join(appDir, 'frame.html')));

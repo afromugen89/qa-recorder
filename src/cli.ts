@@ -11,6 +11,9 @@ import { ISTQB_TECHNIQUES, techniqueName, type TechniqueId } from './data/techni
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { writeBugReport } from './report/render.js';
+import { devices } from 'playwright';
+import { a11ySummary, type WcagLevel, type WcagVersion } from './audit/a11y.js';
+import { DEFAULT_PRESETS, VIEWPORT_PRESETS, layoutSummary } from './audit/layout.js';
 import type { SessionData } from './recorder/types.js';
 import type { TimelineEvent } from './recorder/types.js';
 
@@ -20,6 +23,8 @@ Usage:
   qa-recorder record [url] [options]
   qa-recorder data <command> [options]     Generate test data in the terminal
   qa-recorder report <session-folder> [options]   Write a bug report from a recording
+  qa-recorder check <url> [options]        Accessibility and responsive checks, no window
+  qa-recorder devices                      List device names for --device
 
 Record options:
   -o, --out <dir>        Folder for recordings (default: ./recordings)
@@ -34,7 +39,18 @@ Record options:
   --profiles <file>      Data profiles file (default: .qa-recorder/profiles.json)
   --mocks <file>         API mock rules file (default: .qa-recorder/mocks.json)
   --seed <n>             Faker seed, to reproduce generated data
+  --device <name>        Record as a phone or tablet, e.g. "iPhone 15 Pro"
   -h, --help             Show this help
+
+Check options:
+  --wcag 2.0|2.1|2.2     WCAG version (default: 2.2)
+  --level A|AA|AAA       WCAG level (default: AA)
+  --best-practices       Also run axe-core best-practice rules
+  --sizes <ids>          Comma-separated viewports (default: ${DEFAULT_PRESETS.join(', ')})
+  --widths <px,px>       Extra widths to check
+  --breakpoints          Also check both sides of each CSS breakpoint
+  --no-a11y  --no-layout  -o, --out <dir>  --device <name>
+  Exits with code 1 when an accessibility violation or layout error is found.
 
 Report options:
   --title <text>  --expected <text>  --actual <text>  --notes <text>
@@ -93,6 +109,12 @@ function format(event: TimelineEvent): string | undefined {
       return `${time} ${dim(`${event.newPage ? 'new tab' : 'navigate'} ${event.url}`)}`;
     case 'bug':
       return `${time} ${color(35)('BUG     ')} ${event.title} → ${event.reportDir}/report.html`;
+    case 'a11y':
+      return `${time} ${color(35)('A11Y    ')} ${event.result.standard}: ${a11ySummary(event.result)}`;
+    case 'layout':
+      return `${time} ${color(35)('LAYOUT  ')} ${layoutSummary(event.result)}`;
+    case 'viewport':
+      return `${time} ${dim(`resize ${event.width}x${event.height}${event.label ? ` ${event.label}` : ''}${event.reset ? ' (restored)' : ''}`)}`;
     case 'loop':
       return `${time} ${color(36)('LOOP    ')} ${event.phase}${event.iteration ? ` ${event.iteration}/${event.total}` : ''}${event.error ? ` ${red(event.error)}` : ''}`;
   }
@@ -115,6 +137,7 @@ async function record(argv: string[]): Promise<void> {
       profiles: { type: 'string' },
       mocks: { type: 'string' },
       seed: { type: 'string' },
+      device: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -142,6 +165,7 @@ async function record(argv: string[]): Promise<void> {
     ...(values.profiles && { profilesPath: values.profiles }),
     ...(values.mocks && { mocksPath: values.mocks }),
     ...(values.seed !== undefined && { seed: Number(values.seed) }),
+    ...(values.device && { device: values.device }),
     onEvent: (event) => {
       const line = format(event);
       if (line) console.log(line);
@@ -327,6 +351,87 @@ function report(argv: string[]): void {
   console.log(`  ${relative(process.cwd(), written.markdown)}  (paste into Jira)`);
 }
 
+function listDevices(): void {
+  console.log('Presets in the Responsive tab and for check --sizes:');
+  for (const p of VIEWPORT_PRESETS) console.log(`  ${p.id.padEnd(22)} ${String(p.width).padStart(4)}×${p.height}  ${dim(p.group)}`);
+  console.log('\nAll Playwright devices for --device:');
+  for (const name of Object.keys(devices).filter((n) => !n.endsWith('landscape'))) {
+    const d = devices[name];
+    console.log(`  ${name.padEnd(30)} ${String(d.viewport.width).padStart(4)}×${d.viewport.height}${d.isMobile ? dim('  mobile') : ''}`);
+  }
+}
+
+/** Opens a URL without a window, runs the checks and writes a report. */
+async function check(argv: string[]): Promise<void> {
+  const { values, positionals } = parseArgs({
+    args: argv,
+    allowPositionals: true,
+    options: {
+      out: { type: 'string', short: 'o', default: 'recordings' },
+      wcag: { type: 'string', default: '2.2' },
+      level: { type: 'string', default: 'AA' },
+      'best-practices': { type: 'boolean', default: false },
+      sizes: { type: 'string' },
+      widths: { type: 'string' },
+      breakpoints: { type: 'boolean', default: false },
+      'no-a11y': { type: 'boolean', default: false },
+      'no-layout': { type: 'boolean', default: false },
+      device: { type: 'string' },
+      executable: { type: 'string' },
+    },
+  });
+  let url = positionals[0];
+  if (!url) throw new Error('Give a URL, e.g. qa-recorder check https://example.com');
+  if (!/^[a-z]+:/i.test(url)) url = `https://${url}`;
+  if (!['2.0', '2.1', '2.2'].includes(values.wcag!)) throw new Error('--wcag must be 2.0, 2.1 or 2.2');
+  const level = values.level!.toUpperCase();
+  if (!['A', 'AA', 'AAA'].includes(level)) throw new Error('--level must be A, AA or AAA');
+
+  const recorder = await startRecording({
+    url, outDir: values.out, headless: true, panel: false, executablePath: values.executable,
+    ...(values.device && { device: values.device }),
+  });
+  let failed = false;
+  try {
+    await recorder.page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
+    if (!values['no-a11y']) {
+      const { result } = await recorder.audit.a11y(recorder.page, {
+        version: values.wcag as WcagVersion, level: level as WcagLevel, bestPractices: values['best-practices'],
+      });
+      console.log(`${result.violations.length ? red('A11Y') : green('A11Y')}    ${result.standard}: ${a11ySummary(result)}`);
+      for (const v of result.violations) {
+        console.log(`  ${(v.impact ?? '').padEnd(9)} ${v.help} ${dim(`(${v.id}${v.wcag.length ? `, WCAG ${v.wcag.join(', ')}` : ''}) ×${v.nodeCount}`)}`);
+      }
+      if (result.violations.length) failed = true;
+    }
+    if (!values['no-layout']) {
+      let boundaries: { width: number; reason: string }[] = [];
+      if (values.breakpoints) {
+        const found = await recorder.audit.handle(recorder.page, { cmd: 'breakpoints' }) as { ok: boolean; result?: { boundaries: typeof boundaries } };
+        boundaries = found.result?.boundaries ?? [];
+      }
+      const { result } = await recorder.audit.layout(recorder.page, {
+        presets: values.sizes ? values.sizes.split(',').map((s) => s.trim()) : DEFAULT_PRESETS,
+        widths: values.widths ? values.widths.split(',').map(Number) : [],
+        boundaries,
+        current: false,
+      });
+      const errors = result.viewports.some((v) => v.error || v.issues.some((i) => i.severity === 'error'));
+      console.log(`${errors ? red('LAYOUT') : green('LAYOUT')}  ${layoutSummary(result)}`);
+      for (const v of result.viewports) {
+        const e = v.issues.filter((i) => i.severity === 'error').length;
+        console.log(`  ${`${v.width}×${v.height}`.padEnd(10)} ${v.label.padEnd(28)} ${v.error ? red(v.error) : `${e ? red(`${e} error${e > 1 ? 's' : ''}`) : '0 errors'}, ${v.issues.length - e} warning${v.issues.length - e === 1 ? '' : 's'}`}`);
+      }
+      if (errors) failed = true;
+    }
+    const written = await recorder.createBug({ title: undefined });
+    console.log(`\nReport: ${relative(process.cwd(), written.html)}`);
+  } finally {
+    await recorder.stop();
+  }
+  if (failed) process.exitCode = 1;
+}
+
 async function main(): Promise<void> {
   const [command, ...rest] = process.argv.slice(2);
   if (!command || command === '-h' || command === '--help') {
@@ -336,6 +441,8 @@ async function main(): Promise<void> {
   if (command === 'record') return record(rest);
   if (command === 'data') return data(rest);
   if (command === 'report') return report(rest);
+  if (command === 'check') return check(rest);
+  if (command === 'devices') return listDevices();
   // Allow `qa-recorder https://example.com` as a shortcut.
   if (/^(https?:|[\w-]+\.)/.test(command)) return record([command, ...rest]);
   console.error(`Unknown command "${command}".\n\n${HELP}`);

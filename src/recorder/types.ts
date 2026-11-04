@@ -1,5 +1,7 @@
 import type { GeneratorSpec } from '../data/faker.js';
 import type { TechniqueId } from '../data/techniques.js';
+import type { A11yResult } from '../audit/a11y.js';
+import type { LayoutResult } from '../audit/layout.js';
 
 export type ActionKind =
   | 'click'
@@ -145,7 +147,36 @@ export interface BugEvent extends BaseEvent {
   reportDir: string;
 }
 
-export type TimelineEvent = ActionEvent | NetworkEvent | ConsoleEvent | PageErrorEvent | NavigationEvent | LoopEvent | BugEvent;
+/** An accessibility scan of the page (axe-core against a WCAG level). */
+export interface A11yEvent extends BaseEvent {
+  type: 'a11y';
+  url: string;
+  result: A11yResult;
+  /** Page with the failing elements outlined, relative to the session folder. */
+  screenshot?: string;
+}
+
+/** A responsive layout check of the page at several sizes. */
+export interface LayoutEvent extends BaseEvent {
+  type: 'layout';
+  url: string;
+  result: LayoutResult;
+}
+
+/** The QA resized the tab from the panel (or put it back). */
+export interface ViewportEvent extends BaseEvent {
+  type: 'viewport';
+  width: number;
+  height: number;
+  /** Preset name, e.g. "iPhone SE (3rd gen)". */
+  label?: string;
+  /** True when the tab went back to its original size. */
+  reset?: boolean;
+}
+
+export type TimelineEvent =
+  | ActionEvent | NetworkEvent | ConsoleEvent | PageErrorEvent | NavigationEvent | LoopEvent | BugEvent
+  | A11yEvent | LayoutEvent | ViewportEvent;
 
 export interface SessionSummary {
   actions: number;
@@ -170,6 +201,10 @@ export interface SessionData {
     slowThresholdMs: number;
     /** Faker seed; the same seed reproduces the same generated data. */
     dataSeed?: number;
+    /** Playwright device the session was recorded as, e.g. "iPhone 15 Pro". */
+    device?: string;
+    /** Initial viewport, when fixed (headless or a device). */
+    viewport?: { width: number; height: number };
   };
   summary: SessionSummary;
   events: TimelineEvent[];
@@ -202,6 +237,11 @@ export interface RecorderOptions {
   mocksPath?: string;
   /** Faker seed, to reproduce generated data. Random by default. */
   seed?: number;
+  /**
+   * Record as a phone or tablet: a Playwright device name such as
+   * "iPhone 15 Pro" or "Pixel 7" (size, touch, pixel ratio and user agent).
+   */
+  device?: string;
   /** Called for each event as it is recorded. */
   onEvent?: (event: TimelineEvent) => void;
 }

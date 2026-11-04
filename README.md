@@ -42,6 +42,7 @@ Options:
 | `--profiles <file>` | `.qa-recorder/profiles.json` | Where data profiles are saved |
 | `--mocks <file>` | `.qa-recorder/mocks.json` | Where API mock rules are saved |
 | `--seed <n>` | random | Faker seed, to reproduce generated data |
+| `--device <name>` | | Record as a phone or tablet (Playwright device name, e.g. `"iPhone 15 Pro"`). `qa-recorder devices` lists them. |
 
 ## Test data panel
 
@@ -109,13 +110,29 @@ Each mock rule matches by **method** (or any) and **URL**. Plain text matches an
 
 Rules are saved to `.qa-recorder/mocks.json` (change with `--mocks <file>`). Commit it and the team gets the same mocks. While any mock is on, the QA tools button turns orange and shows how many are on. Every mocked call is labelled in the terminal, in `session.json` (`"mock": { "rule": …, "changes": [...] }`) and in bug reports, which also warn that mocks were active so nobody files a bug caused by a mock.
 
+## Accessibility and responsive checks
+
+Two more panel tabs check the page you're on. Both are saved to the timeline and added to the next bug report.
+
+**Accessibility** runs [axe-core](https://github.com/dequelabs/axe-core) against the WCAG version (2.0, 2.1, 2.2) and level (A, AA, AAA) you choose, optionally with best-practice rules. It scans the page as it is now, including iframes (also cross-origin) and open shadow DOM. Results list each failed rule with impact, WCAG success criterion and affected elements; **Show** scrolls to an element and outlines it. Rules axe-core can't decide are listed under "needs a manual check". A screenshot with numbered boxes on failing elements is saved.
+
+**Responsive** checks the layout at device sizes (phones, tablets, laptop, desktop, optional landscape and custom widths). Each size loads the current URL in a separate hidden headless browser with the real device emulation (size, touch, pixel ratio, user agent) and the tab's cookies and local storage, so the recorded tab is untouched. It reports sideways scrolling and the elements causing it, overlapping tap targets, crowded tap targets under 24 px (WCAG 2.5.8), text under 12 px, a missing viewport meta tag and blocked pinch zoom (WCAG 1.4.4), with an annotated screenshot per size. **Find breakpoints** reads the page's `@media` rules (cross-origin stylesheets are fetched) and adds the widths on both sides of each breakpoint, tagged as boundary value analysis. **Resize this tab** shrinks the recorded tab to a device size for manual testing and records it as a step.
+
+Without a window, for CI:
+
+```bash
+npx qa-recorder check https://your-app.example.com --wcag 2.2 --level AA --breakpoints
+```
+
+It writes a bug report and exits with code 1 on any accessibility violation or layout error. See `qa-recorder --help` for options.
+
 ## Bug reports
 
 When you find a bug, open the panel (Alt+Shift+D), go to the **Bug** tab and choose **Start bug report**. The form is filled in from the recording:
 
 - **Title**, suggested from the most serious failure and the step that caused it, for example `GET /api/orders returns 500 after clicking "Save" button`.
 - **Actual result**, listing the failed API calls with their response, uncaught errors, console errors and slow calls.
-- **ISTQB technique**, detected from the test data you used: boundary value analysis, equivalence partitioning, error guessing, random testing, use case testing (looper), or exploratory testing if you used none. Tick or untick techniques to change it.
+- **ISTQB technique**, detected from the test data you used: boundary value analysis, equivalence partitioning, error guessing, random testing, use case testing (looper), checklist-based testing (accessibility scan or layout check), or exploratory testing if you used none. Tick or untick techniques to change it.
 - Add the expected result, severity, priority and notes, then choose **Create bug report**.
 
 Each report is saved in `recordings/<session>/bugs/<nn>-<title>/`:
@@ -126,7 +143,7 @@ Each report is saved in `recordings/<session>/bugs/<nn>-<title>/`:
 | `report.md` | Paste into Jira, GitHub or Azure DevOps. |
 | `bug.json` | The same data, structured, for importing into other tools. |
 
-A report contains the environment, numbered steps to reproduce in plain English (with the test data technique and expected valid/invalid for each generated value), expected and actual results, the ISTQB technique and why it was detected, failed API calls with request and response bodies, slow API calls, console and JavaScript errors linked to the step that caused them, **API response times per endpoint** (calls, errors, average, p95, max), screenshots, and the full timeline.
+A report contains the environment, numbered steps to reproduce in plain English (with the test data technique and expected valid/invalid for each generated value), expected and actual results, the ISTQB technique and why it was detected, failed API calls with request and response bodies, slow API calls, console and JavaScript errors linked to the step that caused them, **API response times per endpoint** (calls, errors, average, p95, max), accessibility and responsive layout results with annotated screenshots, screenshots, and the full timeline.
 
 The second bug in a session can cover the whole session or only what happened since the previous bug.
 
@@ -150,7 +167,7 @@ network.har       full network log (open in Chrome DevTools or any HAR viewer)
 screenshots/      one PNG after each action
 ```
 
-`session.json` holds one timeline. Each event has a `type` of `action`, `network`, `console`, `pageerror`, `navigation`, `loop` or `bug`. Actions carry a Playwright locator in two forms:
+`session.json` holds one timeline. Each event has a `type` of `action`, `network`, `console`, `pageerror`, `navigation`, `loop`, `bug`, `a11y`, `layout` or `viewport`. Actions carry a Playwright locator in two forms:
 
 ```json
 {
@@ -179,6 +196,15 @@ const session = await recorder.stop();
 console.log(session.summary);
 ```
 
+The checks also work on any Playwright page, for example inside your own tests:
+
+```ts
+import { runA11yScan, runLayoutCheck } from 'qa-recorder';
+
+const a11y = await runA11yScan(page, { version: '2.2', level: 'AA' });
+expect(a11y.violations).toEqual([]);
+```
+
 ## How it works
 
 qa-recorder launches Chromium through Playwright and injects a small recorder script into every page and frame (`src/injected/recorder.js`). That script listens for user events in the capture phase and reads the real target through `composedPath()`, which reaches inside open shadow roots. It also wraps `attachShadow` so it can listen inside closed shadow roots. It sends each action to Node through a Playwright binding. Network, console and error events come straight from Playwright, so they don't depend on the page cooperating.
@@ -196,4 +222,6 @@ npm run build
 1. Recorder core ✓
 2. Test data tools ✓
 3. Bug report ✓
-4. Playwright test script export
+4. API mocking ✓
+5. Accessibility and responsive checks ✓
+6. Playwright test script export
