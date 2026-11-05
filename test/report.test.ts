@@ -47,12 +47,14 @@ before(async () => {
   await page.waitForTimeout(300);
   const draft = await page.evaluate(() => (window as any).__qaPanel({ cmd: 'bugDraft', scope: 'since-last-bug' }));
   assert.equal(draft.ok, true);
-  assert.match(draft.result.title, /Boom from demo/);
+  // The panel no longer suggests a title; the QA types it.
+  assert.equal(draft.result.title, undefined);
   assert.equal(draft.result.hasPreviousBug, true);
   const created = await page.evaluate(() =>
     (window as any).__qaPanel({ cmd: 'createBug', bug: { scope: 'since-last-bug', techniques: ['error-guessing'], severity: 'critical' } }),
   );
   assert.equal(created.ok, true, JSON.stringify(created));
+  assert.match(created.result.title, /Boom from demo/);
   const bugDirs = readdirSync(join(recorder.sessionDir, 'bugs')).sort();
   const secondDir = join(recorder.sessionDir, 'bugs', bugDirs[1]);
   second = {
@@ -110,7 +112,7 @@ test('links failed API calls and console errors to the step that caused them', (
   assert.match(fail.responseBody ?? '', /Database timeout/);
   const consoleError = first.report.consoleErrors.find((e) => e.text === 'Order failed to load');
   assert.equal(consoleError?.step, fail.step);
-  assert.match(first.report.actual, /GET \/api\/fail returned 500/);
+  assert.equal((first.report as any).actual, undefined);
 });
 
 test('reports slow calls and API response times per endpoint', () => {
@@ -131,9 +133,10 @@ test('a report scoped after the previous bug starts where the tester was', () =>
 
 test('Markdown is ready for Jira and HTML is self-contained', () => {
   const md = readFileSync(first.markdown, 'utf8');
-  for (const heading of ['## Steps to reproduce', '## Expected result', '## Actual result', '## Test design technique (ISTQB)', '## Failed API calls', '## API response times']) {
+  for (const heading of ['## Steps to reproduce', '## Expected result', '## Test design technique (ISTQB)', '## Failed API calls', '## API response times']) {
     assert.ok(md.includes(heading), heading);
   }
+  assert.ok(!md.includes('Actual result'));
   assert.match(md, /\*\*Test technique \(ISTQB\):\*\* Boundary value analysis/);
   assert.match(md, /!\[Bug\]\(\.\.\/\.\.\/screenshots\/bug-\d+\.png\)/);
   const html = readFileSync(first.html, 'utf8');
@@ -220,9 +223,10 @@ test('writes Jira text, attachments and a copy button', () => {
   const wiki = readFileSync(first.jiraFile, 'utf8');
   assert.match(wiki, /^\*Severity:\* major/);
   assert.match(wiki, /\*Test technique \(ISTQB\):\* Boundary value analysis/);
-  for (const heading of ['Environment', 'Steps to reproduce', 'Expected result', 'Actual result', 'Test design technique (ISTQB)', 'Failed API calls', 'Screenshots']) {
+  for (const heading of ['Environment', 'Steps to reproduce', 'Expected result', 'Test design technique (ISTQB)', 'Failed API calls', 'Screenshots']) {
     assert.match(wiki, new RegExp(`^h3\\. ${heading.replace(/[()]/g, '\\$&')}$`, 'm'), heading);
   }
+  assert.doesNotMatch(wiki, /Actual result/);
   assert.match(wiki, /^# Open http/m);
   assert.match(wiki, /^\|\|Step\|\|Request\|\|Status\|\|Time\|\|$/m);
   assert.match(wiki, /\{noformat\}\n.*Database timeout/s);

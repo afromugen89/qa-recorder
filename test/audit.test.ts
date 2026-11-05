@@ -165,7 +165,6 @@ test('bug report includes the checks, their steps and the ISTQB technique', asyn
   const draft = await panel('bugDraft', { scope: 'session' });
   assert.ok(draft.a11yViolations > 0);
   assert.ok(draft.layoutIssues > 0);
-  assert.match(draft.title, /^Accessibility: /);
   assert.ok(draft.techniques.some((t: { id: string }) => t.id === 'checklist-based-testing'));
   assert.ok(draft.techniques.some((t: { id: string }) => t.id === 'boundary-value-analysis'));
 

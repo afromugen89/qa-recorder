@@ -13,7 +13,6 @@ export type Priority = 'high' | 'medium' | 'low';
 export interface BugInput {
   title?: string;
   expected?: string;
-  actual?: string;
   severity?: Severity;
   priority?: Priority;
   /** Overrides the detected techniques. */
@@ -129,7 +128,6 @@ export interface BugReport {
   };
   steps: ReportStep[];
   expected?: string;
-  actual: string;
   notes?: string;
   failedApiCalls: ReportApiCall[];
   slowApiCalls: ReportApiCall[];
@@ -474,37 +472,6 @@ function suggestTitle(failed: ReportApiCall[], pageErrors: PageErrorEvent[], con
   return 'Untitled bug';
 }
 
-function suggestActual(
-  failed: ReportApiCall[], pageErrors: { message: string }[], consoleErrors: { text: string }[], slow: ReportApiCall[], threshold: number,
-  a11y: ReportA11yScan[] = [], layout: ReportLayoutCheck[] = [],
-): string {
-  const lines: string[] = [];
-  for (const c of failed.slice(0, 5)) {
-    const body = c.responseBody ? `: ${c.responseBody.replace(/\s+/g, ' ').slice(0, 120)}` : '';
-    lines.push(c.failure
-      ? `${c.method} ${shortUrl(c.url)} failed (${c.failure})${c.step ? ` at step ${c.step}` : ''}.`
-      : `${c.method} ${shortUrl(c.url)} returned ${c.status} ${c.statusText ?? ''}`.trim() + `${body}${c.step ? ` (step ${c.step})` : ''}.`);
-  }
-  for (const e of pageErrors.slice(0, 3)) lines.push(`Uncaught JavaScript error: ${e.message}`);
-  for (const e of consoleErrors.slice(0, 3)) lines.push(`Console error: ${e.text.slice(0, 200)}`);
-  for (const scan of a11y) {
-    if (!scan.violations.length) continue;
-    lines.push(`Accessibility check (${scan.standard}) on ${shortUrl(scan.url)}: ${scan.summary}.`);
-    for (const v of scan.violations.slice(0, 3)) {
-      lines.push(`- ${v.help} (${v.impact ?? 'minor'}${v.wcag.length ? `, WCAG ${v.wcag.join(', ')}` : ''}): ${v.nodeCount} element${v.nodeCount > 1 ? 's' : ''}, e.g. ${v.nodes[0]?.selector ?? ''}`);
-    }
-  }
-  for (const check of layout) {
-    for (const v of check.viewports) {
-      const problems = v.issues.filter((i) => i.severity === 'error').slice(0, 2);
-      if (!problems.length) continue;
-      lines.push(`At ${v.width}×${v.height}${v.device ? ` (${v.device})` : ''}: ${problems.map((p) => p.message).join(' ')}`);
-    }
-  }
-  for (const c of slow.slice(0, 3)) lines.push(`${c.method} ${shortUrl(c.url)} took ${c.durationMs} ms (threshold ${threshold} ms).`);
-  return lines.length ? lines.join('\n') : 'Describe what happened.';
-}
-
 /** Builds a bug report from a recorded session. */
 export function buildBugReport(session: SessionData, input: BugInput = {}): BugReport {
   const from = input.fromSeq ?? 0;
@@ -597,7 +564,6 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     },
     steps,
     expected: input.expected?.trim() || undefined,
-    actual: input.actual?.trim() || suggestActual(failedApiCalls, pageErrorEvents, errorConsole, slowApiCalls, session.meta.slowThresholdMs, accessibility, layout),
     notes: input.notes?.trim() || undefined,
     failedApiCalls,
     slowApiCalls,
@@ -651,8 +617,6 @@ export function reportScreenshots(report: BugReport): ReportScreenshot[] {
 export function bugDraft(session: SessionData, fromSeq = 0) {
   const report = buildBugReport(session, { fromSeq });
   return {
-    title: report.title,
-    actual: report.actual,
     techniques: report.techniques,
     steps: report.steps.length,
     /** For the step and screenshot pickers. */

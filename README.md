@@ -130,10 +130,8 @@ It writes a bug report and exits with code 1 on any accessibility violation or l
 
 When you find a bug, switch to the QA tools (Alt+Shift+D), go to the **Bug** tab and choose **Start bug report**. The form is filled in from the recording:
 
-- **Title**, suggested from the most serious failure and the step that caused it, for example `GET /api/orders returns 500 after clicking "Save" button`.
-- **Actual result**, listing the failed API calls with their response, uncaught errors, console errors and slow calls.
 - **ISTQB technique**, detected from the test data you used: boundary value analysis, equivalence partitioning, error guessing, random testing, use case testing (looper), checklist-based testing (accessibility scan or layout check), or exploratory testing if you used none. Tick or untick techniques to change it.
-- Add the expected result, severity, priority and notes, then choose **Create bug report**.
+- Type a title, add the expected result, severity, priority and notes, then choose **Create bug report**.
 
 Each report is saved in `recordings/<session>/bugs/<nn>-<title>/`:
 
@@ -143,7 +141,7 @@ Each report is saved in `recordings/<session>/bugs/<nn>-<title>/`:
 | `report.md` | Paste into Jira, GitHub or Azure DevOps. |
 | `bug.json` | The same data, structured, for importing into other tools. |
 
-A report contains the environment, numbered steps to reproduce in plain English (with the test data technique and expected valid/invalid for each generated value), expected and actual results, the ISTQB technique and why it was detected, failed API calls with request and response bodies, slow API calls, console and JavaScript errors linked to the step that caused them, **API response times per endpoint** (calls, errors, average, p95, max), accessibility and responsive layout results with annotated screenshots, screenshots, and the full timeline.
+A report contains the environment, numbered steps to reproduce in plain English (with the test data technique and expected valid/invalid for each generated value), the expected result, the ISTQB technique and why it was detected, failed API calls with request and response bodies, slow API calls, console and JavaScript errors linked to the step that caused them, **API response times per endpoint** (calls, errors, average, p95, max), accessibility and responsive layout results with annotated screenshots, screenshots, and the full timeline.
 
 The second bug in a session can cover the whole session or only what happened since the previous bug.
 

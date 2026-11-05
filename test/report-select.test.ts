@@ -79,7 +79,6 @@ test('left-out steps are gone and the rest are renumbered', () => {
   const load = picked.steps.find((s) => /Load orders/.test(s.text))!;
   // The failed call still points at the step that made it, under its new number.
   assert.equal(picked.failedApiCalls[0].step, load.number);
-  assert.match(picked.actual, new RegExp(`\\(step ${load.number}\\)`));
   // API calls from a left-out step stay in the report.
   assert.ok(picked.apiPerformance.some((p) => p.endpoint.endsWith('/api/ok')), JSON.stringify(picked.apiPerformance));
   // The ISTQB technique is still named.
@@ -169,6 +168,10 @@ test('screenshot preview only serves recorded screenshots', async () => {
       (r.querySelector('[data-pick=failedApiCalls] input') as HTMLInputElement).click();
     });
     assert.match(String(await ui('text')), /Failed API calls \(0 of 1\)/);
+    // The title is not suggested any more, and Create needs one.
+    await ui('button', 'Create bug report');
+    await tools.waitForFunction(() => (window as any).__qaPanelUi._root.textContent.includes('Enter a title for the bug.'));
+    await tools.fill('input[aria-label="Bug title"]', 'Orders do not load');
     await ui('button', 'Create bug report');
     await tools.waitForFunction(() => (window as any).__qaPanelUi._root.textContent.includes('Copy description for Jira'));
     const bugDir = join(again.sessionDir, 'bugs', readdirSync(join(again.sessionDir, 'bugs'))[0]);

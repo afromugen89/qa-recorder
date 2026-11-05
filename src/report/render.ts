@@ -64,7 +64,6 @@ export function renderMarkdown(r: BugReport, imageBase = '.'): string {
   out.push('');
 
   out.push('## Expected result', '', r.expected ?? '_Not stated._', '');
-  out.push('## Actual result', '', r.actual, '');
 
   out.push('## Test design technique (ISTQB)', '');
   for (const t of r.techniques) {
@@ -361,8 +360,6 @@ export function renderHtml(r: BugReport, sessionDir: string, jira: JiraCopy = ji
 
   <h2>Expected result</h2>
   <div class="box">${esc(r.expected ?? 'Not stated.')}</div>
-  <h2>Actual result</h2>
-  <div class="box">${esc(r.actual)}</div>
 
   <h2>Test design technique (ISTQB)</h2>
   <ul>${r.techniques.map((t) => `<li><b>${esc(t.name)}</b>${t.reason ? `: ${esc(t.reason)}` : ''}${t.detected ? '' : ' <span class="tag">set by tester</span>'}</li>`).join('')}</ul>
