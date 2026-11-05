@@ -345,8 +345,10 @@ npx qa-recorder check https://your-app.example.com/checkout --wcag 2.2 --level A
 5. Under **Screenshots**, untick any screenshot you don't want in the report. Click **Preview** to look at one first. *The page as it is when you click Create* is the screenshot of the app taken at that moment. Screenshots of left-out steps are dropped too. **All** and **None** tick or untick the whole list.
 
    ![Picking steps and screenshots](images/panel-bug-pick.png)
-6. Check the ISTQB technique. Tick or untick techniques if the detected one isn't right, for example tick *Decision table testing* or *State transition testing* if that's how you designed the test.
-7. Click **Create bug report**. The terminal prints a `BUG` line with the path to the report.
+6. Under **API details in the report**, tick the sections you want: **Failed API calls**, **Slow API calls** and **API response times**. Failed and slow calls are ticked to start with; response times are not. Each ticked section lists its calls (or, for response times, its endpoints), so you can untick single ones that have nothing to do with the bug. The count shows how many are kept, for example *Failed API calls (1 of 3)*.
+7. Check the ISTQB technique. Tick or untick techniques if the detected one isn't right, for example tick *Decision table testing* or *State transition testing* if that's how you designed the test.
+8. Click **Create bug report**. The terminal prints a `BUG` line with the path to the report.
+9. The Bug tab now shows **Last bug report** with two buttons: **Copy description for Jira** and **Copy summary**. See [Paste the report into Jira](#paste-the-report-into-jira).
 
 ![Bug tab](images/panel-bug.png)
 
@@ -369,30 +371,42 @@ Decision table testing and state transition testing can't be detected from the r
 
 ### What's in the report
 
-Each report is saved in `recordings/<session>/bugs/<nn>-<title>/` as three files:
+Each report is saved in `recordings/<session>/bugs/<nn>-<title>/`:
 
 | File | Use it to |
 | --- | --- |
-| `report.html` | Open in a browser, print, or attach to a ticket. Screenshots are embedded, so it's one file. |
-| `report.md` | Paste into Jira, GitHub or Azure DevOps. |
+| `report.html` | Open in a browser, print, or attach to a ticket. Screenshots are embedded, so it's one file. Click any screenshot to see it at its original size; click again or press Esc to close it. |
+| `jira.txt` | The Jira description in Jira wiki markup. |
+| `attachments/` | The report's screenshots with short names (`bug-screenshot.png`, `step-03.png`, …), ready to attach to the Jira ticket. |
+| `report.md` | Paste into GitHub or Azure DevOps. |
 | `bug.json` | Import into other tools. |
 
 A report contains:
 
-- Environment: start URL, browser and user agent, when it was recorded, the test data seed, and the device and viewport size if you used `--device` or resized the tab
+- Environment: start URL, browser and user agent, and the device and viewport size if you used `--device` or resized the tab
 - Numbered **steps to reproduce** in plain English, with the test data and technique for each generated value and whether it was expected to be valid or invalid
 - Expected and actual results
 - The ISTQB technique and why it was chosen
-- Failed API calls with request and response bodies
-- Slow API calls
+- Failed API calls with request and response bodies (optional)
+- Slow API calls (optional)
 - Console and JavaScript errors, linked to the step that caused them
-- **API response times per endpoint**: number of calls, errors, average, p95 and max
-- Screenshots and the full timeline
+- **API response times per endpoint**: number of calls, errors, average, p95 and max (optional)
+- Screenshots
 - **Accessibility** results for each scan: the WCAG standard, every failed rule with impact, success criterion, affected elements and a *How to fix* link, the items that need a manual check, and the screenshot with numbered boxes
 - **Responsive layout** results for each check: a row per size with its errors and warnings, and the screenshot for each size
 - A warning if any mocks were active
 
 If the only problems are from a scan or layout check, the suggested title says so, for example `Accessibility: Images must have alternative text (2 elements) and 3 more WCAG 2.2 AA issues on /checkout`.
+
+### Paste the report into Jira
+
+1. In Jira, create the issue. Click **Copy summary** (in the Bug tab or at the top of `report.html`) and paste it into **Summary**.
+2. Click **Copy description for Jira** and paste into **Description**. The headings, numbered steps, tables and code blocks come through as Jira formatting.
+3. Attach the files from the report's `attachments` folder. The description names each one (for example *step-03.png*), and in Jira Server or Data Center it shows them as thumbnails once attached.
+
+The copy button puts two versions on the clipboard: rich text, which Jira Cloud's editor uses, and Jira wiki markup, which Jira Server and Data Center use in text mode. If copying is blocked, open **Jira text (wiki markup)** at the bottom of `report.html` and copy it from there, or open `jira.txt`.
+
+The full timeline is not in the report. It is still in the session's `session.json` and `network.har` if a developer needs it.
 
 ### From the terminal, after recording
 
@@ -415,6 +429,7 @@ npx qa-recorder report recordings/2026-11-04_09-15-02 \
 | `--from-seq <n>`, `--to-seq <n>` | Only include part of the timeline. |
 | `--skip-steps <n,n>` | Leave these step numbers out. Use the numbers from a report written without this option; the remaining steps are renumbered. |
 | `--skip-screenshots <path,path>` | Leave these screenshots out, for example `screenshots/0004-click.png`. |
+| `--leave-out <sections>` | Leave out API sections: `failed-calls`, `slow-calls`, `response-times`. All three are included unless you leave them out. |
 
 ## 11. Find your recordings
 

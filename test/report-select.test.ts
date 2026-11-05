@@ -81,7 +81,7 @@ test('left-out steps are gone and the rest are renumbered', () => {
   assert.equal(picked.failedApiCalls[0].step, load.number);
   assert.match(picked.actual, new RegExp(`\\(step ${load.number}\\)`));
   // API calls from a left-out step stay in the report.
-  assert.ok(picked.timeline.some((e) => e.type === 'network' && e.url.endsWith('/api/ok')));
+  assert.ok(picked.apiPerformance.some((p) => p.endpoint.endsWith('/api/ok')), JSON.stringify(picked.apiPerformance));
   // The ISTQB technique is still named.
   assert.ok(picked.techniques.length >= 1);
 });
@@ -102,7 +102,7 @@ test('left-out screenshots are not in the report files', () => {
 });
 
 test('without a selection everything is included', () => {
-  const full = buildBugReport(session, { toSeq: picked.timeline.at(-1)!.seq });
+  const full = buildBugReport(session, { toSeq: session.events.find((e) => e.type === 'bug')!.seq });
   assert.equal(full.steps.length, draft.stepList.length);
 });
 
@@ -146,6 +146,35 @@ test('screenshot preview only serves recorded screenshots', async () => {
     assert.ok(counts.steps >= 1);
     assert.ok(counts.shots >= 2, 'page screenshot plus the step screenshot');
     assert.match(counts.text!, /Reproduction steps \(\d+ of \d+\)/);
+
+    // API sections: failed calls on by default, response times off until ticked.
+    const ui = (fn: string, arg?: string) => tools.evaluate(([f, a]) => {
+      const r = (window as any).__qaPanelUi._root as HTMLElement;
+      // No named inner functions here: tsx would add __name, which the page lacks.
+      const input = r.querySelector(`input[aria-label="${a}"]`) as HTMLInputElement | null;
+      if (f === 'checked') return input!.checked;
+      if (f === 'click') { input!.click(); return true; }
+      if (f === 'has') return Boolean(r.querySelector(a!));
+      if (f === 'button') { (Array.from(r.querySelectorAll('button')).find((b) => b.textContent === a) as HTMLElement).click(); return true; }
+      return r.textContent;
+    }, [fn, arg] as const);
+    assert.equal(await ui('checked', 'Include Failed API calls'), true);
+    assert.equal(await ui('checked', 'Include API response times'), false);
+    assert.equal(await ui('has', '[data-pick=apiResponseTimes]'), false);
+    await ui('click', 'Include API response times');
+    assert.equal(await ui('has', '[data-pick=apiResponseTimes]'), true);
+    // Untick the one failed call, keep the section.
+    await tools.evaluate(() => {
+      const r = (window as any).__qaPanelUi._root as HTMLElement;
+      (r.querySelector('[data-pick=failedApiCalls] input') as HTMLInputElement).click();
+    });
+    assert.match(String(await ui('text')), /Failed API calls \(0 of 1\)/);
+    await ui('button', 'Create bug report');
+    await tools.waitForFunction(() => (window as any).__qaPanelUi._root.textContent.includes('Copy description for Jira'));
+    const bugDir = join(again.sessionDir, 'bugs', readdirSync(join(again.sessionDir, 'bugs'))[0]);
+    const made: BugReport = JSON.parse(readFileSync(join(bugDir, 'bug.json'), 'utf8'));
+    assert.equal(made.failedApiCalls.length, 0);
+    assert.ok(made.apiPerformance.length >= 1);
   } finally {
     await again.stop();
   }
@@ -162,4 +191,19 @@ test('report command can skip steps by number', () => {
   const dir = readdirSync(join(recorder.sessionDir, 'bugs')).find((d) => d.includes('skip-cli'))!;
   const report: BugReport = JSON.parse(readFileSync(join(recorder.sessionDir, 'bugs', dir, 'bug.json'), 'utf8'));
   assert.ok(!report.steps.some((s) => s.key === full.steps[1].key));
+});
+
+test('report command can leave out API sections', () => {
+  const out = execFileSync(
+    process.execPath,
+    ['--import', 'tsx', 'src/cli.ts', 'report', recorder.sessionDir, '--leave-out', 'failed-calls,response-times', '--title', 'No API'],
+    { encoding: 'utf8' },
+  );
+  assert.match(out, /0 failed API calls/);
+  assert.match(out, /jira\.txt/);
+  const dir = readdirSync(join(recorder.sessionDir, 'bugs')).find((d) => d.includes('no-api'))!;
+  const report: BugReport = JSON.parse(readFileSync(join(recorder.sessionDir, 'bugs', dir, 'bug.json'), 'utf8'));
+  assert.equal(report.apiPerformance.length, 0);
+  assert.ok(report.slowApiCalls.length >= 1, 'slow calls stay in');
+  assert.throws(() => execFileSync(process.execPath, ['--import', 'tsx', 'src/cli.ts', 'report', recorder.sessionDir, '--leave-out', 'nope'], { stdio: 'pipe' }));
 });
