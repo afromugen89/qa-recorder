@@ -153,8 +153,8 @@ Every value the tool puts on the page is tagged on the recorded action (`testDat
 | ID | Requirement | Status |
 | --- | --- | --- |
 | BUG-01 | Start a bug report from the **Bug** tab while recording, or afterwards with `qa-recorder report <session-folder>`. | Built |
-| BUG-02 | Suggest a title from the most serious failure and the step that caused it, for example `GET /api/orders returns 500 after clicking "Save" button`. | Built |
-| BUG-03 | Pre-fill the actual result with failed API calls and their responses, uncaught errors, console errors and slow calls. | Built |
+| BUG-02 | The tester types the title in the **Bug** tab (required; no suggestion). `qa-recorder report` without `--title` suggests one from the most serious failure and the step that caused it. | Built |
+| BUG-03 | The tester types the actual result in the **Bug** tab; it is not pre-filled. The failed API calls, errors, slow calls and check results sections show what the recording captured. | Built |
 | BUG-04 | **ISTQB technique:** detect the techniques from the test data used and say why (boundary value analysis, equivalence partitioning, error guessing, random testing, use case testing for the looper, checklist-based testing for accessibility and layout checks, boundary value analysis for breakpoint widths). If no generated data was used, the technique is exploratory testing. The tester can tick or untick any technique, including decision table and state transition testing. | Built |
 | BUG-05 | Capture expected result, severity (critical, major, minor, trivial), priority (high, medium, low), reporter and notes. | Built |
 | BUG-06 | Steps to reproduce in plain English, numbered, with the test data label, technique and expected valid or invalid for each generated value, and the frame or shadow DOM location. | Built |

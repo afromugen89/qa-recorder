@@ -775,8 +775,6 @@
   async function loadBugDraft() {
     const draft = await call('bugDraft', { scope: state.bugForm.scope });
     state.bug = draft;
-    state.bugForm.title = draft.title;
-    state.bugForm.actual = draft.actual;
     state.bugForm.techniques = draft.techniques.map((t) => t.id);
   }
 
@@ -934,9 +932,9 @@
         h('label', { class: 'auto' }, h('input', { type: 'radio', name: 'scope', checked: f.scope === 'since-last-bug',
           onchange: () => { f.scope = 'since-last-bug'; run(loadBugDraft); } }), ' Since last bug')) : null,
       h('label', { class: 'f' }, 'Title'),
-      h('input', { 'aria-label': 'Bug title', value: f.title, oninput: set('title') }),
+      h('input', { 'aria-label': 'Bug title', placeholder: 'Describe the bug in one line', value: f.title, oninput: set('title') }),
       area('expected', 'Expected result', 2),
-      area('actual', 'Actual result (filled from the recording)', 4),
+      area('actual', 'Actual result', 3),
       h('div', { class: 'row' },
         h('div', null, h('label', { class: 'f' }, 'Severity'),
           h('select', { 'aria-label': 'Severity', onchange: set('severity') },
@@ -960,6 +958,7 @@
         h('button', {
           class: 'b p', disabled: state.busy,
           onclick: () => run(async () => {
+            if (!f.title.trim()) throw new Error('Enter a title for the bug.');
             const r = await call('createBug', { bug: { ...f } });
             state.lastBug = r;
             state.bug = null;

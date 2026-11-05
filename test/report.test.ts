@@ -47,12 +47,14 @@ before(async () => {
   await page.waitForTimeout(300);
   const draft = await page.evaluate(() => (window as any).__qaPanel({ cmd: 'bugDraft', scope: 'since-last-bug' }));
   assert.equal(draft.ok, true);
-  assert.match(draft.result.title, /Boom from demo/);
+  // The panel no longer suggests a title; the QA types it.
+  assert.equal(draft.result.title, undefined);
   assert.equal(draft.result.hasPreviousBug, true);
   const created = await page.evaluate(() =>
     (window as any).__qaPanel({ cmd: 'createBug', bug: { scope: 'since-last-bug', techniques: ['error-guessing'], severity: 'critical' } }),
   );
   assert.equal(created.ok, true, JSON.stringify(created));
+  assert.match(created.result.title, /Boom from demo/);
   const bugDirs = readdirSync(join(recorder.sessionDir, 'bugs')).sort();
   const secondDir = join(recorder.sessionDir, 'bugs', bugDirs[1]);
   second = {
@@ -110,7 +112,8 @@ test('links failed API calls and console errors to the step that caused them', (
   assert.match(fail.responseBody ?? '', /Database timeout/);
   const consoleError = first.report.consoleErrors.find((e) => e.text === 'Order failed to load');
   assert.equal(consoleError?.step, fail.step);
-  assert.match(first.report.actual, /GET \/api\/fail returned 500/);
+  // Actual result is not suggested; it stays empty unless the QA types it.
+  assert.equal(first.report.actual, undefined);
 });
 
 test('reports slow calls and API response times per endpoint', () => {
@@ -134,6 +137,7 @@ test('Markdown is ready for Jira and HTML is self-contained', () => {
   for (const heading of ['## Steps to reproduce', '## Expected result', '## Actual result', '## Test design technique (ISTQB)', '## Failed API calls', '## API response times']) {
     assert.ok(md.includes(heading), heading);
   }
+  assert.match(md, /## Actual result\n\n_Not stated\._/);
   assert.match(md, /\*\*Test technique \(ISTQB\):\*\* Boundary value analysis/);
   assert.match(md, /!\[Bug\]\(\.\.\/\.\.\/screenshots\/bug-\d+\.png\)/);
   const html = readFileSync(first.html, 'utf8');
