@@ -35,17 +35,23 @@ import type {
 const here = dirname(fileURLToPath(import.meta.url));
 const INJECTED_SCRIPT = readFileSync(join(here, '..', 'injected', 'recorder.js'), 'utf8');
 const PANEL_SCRIPT = readFileSync(join(here, '..', 'injected', 'panel.js'), 'utf8');
+
+type PanelCommand = { cmd: string; [key: string]: unknown };
+
+/** The QA tools page: an empty document that panel.js fills. */
+function toolsPageHtml(): string {
+  // Keep a literal "</script>" in the panel source from ending the tag early.
+  const script = PANEL_SCRIPT.replace(/<\/script/gi, '<\\/script');
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>QA tools</title></head><body><script>${script}</script></body></html>`;
+}
 /**
- * Hide the panel (and check overlays) in bug report screenshots so they show
- * only the app. Playwright applies this style to the live page while it
- * captures, so the panel briefly disappears on screen. That is fine for a bug
- * report the tester asked for, but not for the automatic screenshot after
- * every action: it made the panel flicker on each click. Step screenshots
- * therefore keep the panel in the picture.
+ * The QA tools live in their own window (see openTools), so app screenshots
+ * never contain them. Bug report screenshots still hide the outline boxes that
+ * the accessibility "Show" button draws on the page.
  */
-const SCREENSHOT_STYLE = 'qa-recorder-panel, qa-recorder-overlay { display: none !important; }';
-/** Accessibility and layout evidence keeps the numbered overlay boxes. */
-const AUDIT_SCREENSHOT_STYLE = 'qa-recorder-panel { display: none !important; }';
+const SCREENSHOT_STYLE = 'qa-recorder-overlay { display: none !important; }';
+/** Address of the QA tools tab. It is served by the recorder, never fetched. */
+export const TOOLS_URL = 'http://qa-recorder.tools/';
 /** A tagged value must show up as an action within this time to get its tag. */
 const TAG_WINDOW_MS = 5_000;
 /** Recent API calls kept in full (headers and body) for "Mock this". */
@@ -101,6 +107,15 @@ export class Recorder {
   context!: BrowserContext;
   /** The first tab. */
   page!: Page;
+  /**
+   * The QA tools tab, when `panel` is on. It lives in a separate browser
+   * context, so it is never recorded, mocked or screenshotted.
+   */
+  toolsPage?: Page;
+  private toolsContext?: BrowserContext;
+  private toolsHtml?: string;
+  /** The app tab the QA tools act on: the one the tester last used. */
+  private activePage?: Page;
 
   /** Test data generator, profiles and looper behind the in-page panel. */
   data!: DataService;
@@ -176,10 +191,17 @@ export class Recorder {
     await this.context.exposeBinding('__qaRecord', (source, payload: RawAction) => {
       this.onAction(source.page, source.frame, payload);
     });
+    // Alt+Shift+D in the app brings the QA tools forward.
+    await this.context.exposeBinding('__qaShowTools', (source) => {
+      this.setActive(source.page);
+      if (!this.options.panel) return false;
+      return this.showTools().then(() => true, () => false);
+    });
     await this.context.addInitScript({ content: INJECTED_SCRIPT });
 
     this.data = new DataService(this.dataHost(), resolve(this.options.profilesPath), this.options.seed);
     await this.context.exposeBinding('__qaFocus', (source, payload) => {
+      this.setActive(source.page);
       this.track(
         this.resolveFramePath(source.frame).then((framePath) =>
           this.data.onFocus(source.page, source.frame, payload, framePath),
@@ -194,13 +216,9 @@ export class Recorder {
     });
     await this.mocks.start();
     this.audit = new AuditService(this.auditHost());
-    await this.context.exposeBinding('__qaPanel', (source, command: { cmd: string; [key: string]: unknown }) => {
-      if (command?.cmd?.startsWith('mock')) return this.mocks.handle(command);
-      if (AuditService.COMMANDS.has(command?.cmd)) return this.audit.handle(source.page, command);
-      if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug' || command?.cmd === 'bugShot') return this.handleBugCommand(source.page, command);
-      return this.data.handle(source.page, command);
-    });
-    if (this.options.panel) await this.context.addInitScript({ content: PANEL_SCRIPT });
+    // Commands from a page in the app context act on that page (used by tests
+    // and scripts); commands from the QA tools tab act on the active app tab.
+    await this.context.exposeBinding('__qaPanel', (source, command: PanelCommand) => this.onPanelCommand(source.page, command));
 
     this.context.on('page', (page) => this.attachPage(page, true));
     this.context.on('request', (request) => this.onRequest(request));
@@ -209,6 +227,9 @@ export class Recorder {
     this.browser.on('disconnected', () => this.closedListeners.forEach((fn) => fn()));
 
     this.page = await this.context.newPage();
+    this.activePage = this.page;
+    if (this.options.panel) await this.openTools();
+    await this.page.bringToFront().catch(() => undefined);
     this.initialViewport = this.page.viewportSize() ?? undefined;
     this.userAgent = await this.page.evaluate(() => navigator.userAgent).catch(() => undefined);
     if (this.options.url) {
@@ -223,6 +244,7 @@ export class Recorder {
   /** Resolves when the user closes every tab or the browser. */
   waitForClose(): Promise<void> {
     return new Promise((resolveClose) => {
+      // The QA tools tab alone does not keep the session open.
       const check = () => {
         if (!this.browser.isConnected() || this.context.pages().length === 0) resolveClose();
       };
@@ -287,19 +309,88 @@ export class Recorder {
     return written;
   }
 
-  /** Calls a method on the panel in every open tab. */
-  private broadcast(method: string, payload: unknown): void {
-    for (const page of this.context.pages()) {
-      void page.mainFrame()
-        .evaluate(
-          ([m, p]) => {
-            const ui = (window as unknown as { __qaPanelUi?: Record<string, (x: unknown) => void> }).__qaPanelUi;
-            ui?.[m]?.(p);
-          },
-          [method, payload] as const,
-        )
-        .catch(() => undefined);
+  /** Opens the QA tools tab, or brings it to the front if it is open. */
+  async showTools(): Promise<Page> {
+    if (!this.toolsPage || this.toolsPage.isClosed()) await this.openTools();
+    await this.toolsPage!.bringToFront();
+    return this.toolsPage!;
+  }
+
+  /**
+   * The QA tools run in a page of their own, in a separate browser context:
+   * no recorder script, no mocks, no HAR, and never in an app screenshot.
+   */
+  private async openTools(): Promise<void> {
+    if (!this.toolsContext) {
+      this.toolsHtml ??= toolsPageHtml();
+      this.toolsContext = await this.browser.newContext({
+        viewport: this.options.headless ? { width: 520, height: 900 } : null,
+      });
+      await this.toolsContext.route('**/*', (route) =>
+        route.request().url().startsWith(TOOLS_URL)
+          ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: this.toolsHtml! })
+          : route.abort(),
+      );
+      await this.toolsContext.exposeBinding('__qaPanel', (_source, command: PanelCommand) => {
+        const page = this.appPage();
+        if (!page) return { ok: false, error: 'No app tab is open' };
+        return this.onPanelCommand(page, command);
+      });
     }
+    const page = await this.toolsContext.newPage();
+    this.toolsPage = page;
+    await page.goto(TOOLS_URL);
+    this.notifyApp();
+  }
+
+  private onPanelCommand(page: Page, command: PanelCommand) {
+    if (command?.cmd === 'showApp') return page.bringToFront().then(() => ({ ok: true, result: true }));
+    if (command?.cmd === 'appInfo') return { ok: true, result: this.appInfo() };
+    if (command?.cmd?.startsWith('mock')) return this.mocks.handle(command);
+    if (AuditService.COMMANDS.has(command?.cmd)) {
+      // Outlines drawn on the page are only useful if the page is in view.
+      if (command.cmd === 'a11yShow' && this.toolsPage) void page.bringToFront().catch(() => undefined);
+      return this.audit.handle(page, command);
+    }
+    if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug' || command?.cmd === 'bugShot') return this.handleBugCommand(page, command);
+    return this.data.handle(page, command);
+  }
+
+  /** The app tab the QA tools act on. */
+  private appPage(): Page | undefined {
+    if (this.activePage && !this.activePage.isClosed()) return this.activePage;
+    return this.context.pages().at(-1);
+  }
+
+  private setActive(page: Page | null | undefined): void {
+    if (!page || page === this.activePage || page.isClosed()) return;
+    this.activePage = page;
+    this.notifyApp();
+  }
+
+  private appInfo() {
+    const page = this.appPage();
+    return page ? { pageId: this.pageId(page), url: page.url(), tabs: this.context.pages().length } : null;
+  }
+
+  /** Tells the QA tools which tab they act on. */
+  private notifyApp(): void {
+    this.broadcast('appChanged', this.appInfo());
+  }
+
+  /** Calls a method on the QA tools tab. */
+  private broadcast(method: string, payload: unknown): void {
+    const page = this.toolsPage;
+    if (!page || page.isClosed()) return;
+    void page
+      .evaluate(
+        ([m, p]) => {
+          const ui = (window as unknown as { __qaPanelUi?: Record<string, (x: unknown) => void> }).__qaPanelUi;
+          ui?.[m]?.(p);
+        },
+        [method, payload] as const,
+      )
+      .catch(() => undefined);
   }
 
   private async handleBugCommand(page: Page, command: { cmd: string; [key: string]: unknown }) {
@@ -342,6 +433,7 @@ export class Recorder {
     }
     if (this.saveTimer) clearTimeout(this.saveTimer);
     await this.audit?.close();
+    await this.toolsContext?.close().catch(() => undefined);
     // Closing the context writes the HAR file.
     await this.context.close().catch(() => undefined);
     await this.browser.close().catch(() => undefined);
@@ -398,12 +490,22 @@ export class Recorder {
   private attachPage(page: Page, isNew: boolean): void {
     const pageId = this.pageId(page);
     this.pagesById.set(pageId, page);
-    page.on('close', () => this.pagesById.delete(pageId));
+    page.on('close', () => {
+      this.pagesById.delete(pageId);
+      if (page === this.activePage) {
+        this.activePage = undefined;
+        this.setActive(this.context.pages().at(-1));
+      }
+    });
     if (isNew && pageId > 1) {
       this.push({ type: 'navigation', pageId, url: page.url(), newPage: true });
+      // A popup or new tab the tester opened is where they are working now.
+      this.setActive(page);
     }
     page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame()) this.push({ type: 'navigation', pageId, url: frame.url() });
+      if (frame !== page.mainFrame()) return;
+      this.push({ type: 'navigation', pageId, url: frame.url() });
+      if (page === this.activePage) this.notifyApp();
     });
     page.on('console', (message) => {
       const type = message.type();
@@ -434,6 +536,7 @@ export class Recorder {
 
   private onAction(page: Page, frame: Frame, raw: RawAction): void {
     if (this.stopped) return;
+    this.setActive(page);
     const pageId = this.pageId(page);
     const masked = raw.sensitive && !this.options.keepSecrets;
     const value = masked && raw.value !== undefined ? MASK : raw.value;
@@ -643,7 +746,6 @@ export class Recorder {
     return {
       sessionDir: this.sessionDir,
       executablePath: this.options.executablePath,
-      screenshotStyle: AUDIT_SCREENSHOT_STYLE,
       nextSeq: () => this.seq + 1,
       pageIdOf: (page: Page) => this.pageId(page),
       pushA11y: (event: Omit<A11yEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>) => this.push<A11yEvent>({ type: 'a11y', ...event }),
@@ -667,6 +769,7 @@ export class Recorder {
       pushLoopEvent: (event: Omit<LoopEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>) => {
         this.push<LoopEvent>({ type: 'loop', ...event });
       },
+      notify: (method: string, payload: unknown) => this.broadcast(method, payload),
       waitForApiIdle: async (timeoutMs: number) => {
         const deadline = Date.now() + timeoutMs;
         // Give a just-clicked request a moment to start before checking.

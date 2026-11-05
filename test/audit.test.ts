@@ -189,17 +189,18 @@ test('bug report includes the checks, their steps and the ISTQB technique', asyn
 });
 
 test('panel shows the Accessibility and Responsive tabs', async () => {
-  await page.evaluate(() => (window as any).__qaPanelUi.open());
-  const root = () => page.evaluate(() => (window as any).__qaPanelUi._root.textContent as string);
-  await page.waitForFunction(() => !(window as any).__qaPanelUi._root.textContent.includes('Loading…'));
-  const click = (label: string) => page.evaluate((l) => {
-    const r = (window as any).__qaPanelUi._root as ShadowRoot;
+  const tools = recorder.toolsPage!;
+  await tools.evaluate(() => (window as any).__qaPanelUi.open());
+  const root = () => tools.evaluate(() => (window as any).__qaPanelUi._root.textContent as string);
+  await tools.waitForFunction(() => !(window as any).__qaPanelUi._root.textContent.includes('Loading…'));
+  const click = (label: string) => tools.evaluate((l) => {
+    const r = (window as any).__qaPanelUi._root as HTMLElement;
     [...r.querySelectorAll('button')].find((b) => b.textContent === l)!.click();
   }, label);
   await click('Accessibility');
   assert.match(await root(), /Scan this page/);
   await click('Scan this page');
-  await page.waitForFunction(() => /rules failed/.test((window as any).__qaPanelUi._root.textContent));
+  await tools.waitForFunction(() => /rules failed/.test((window as any).__qaPanelUi._root.textContent));
   await click('Responsive');
   assert.match(await root(), /Run layout check/);
   assert.match(await root(), /iPhone SE \(3rd gen\) 375/);

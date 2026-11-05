@@ -28,7 +28,7 @@ async function panel<T = any>(cmd: string, args: Record<string, unknown> = {}): 
 async function focusField(label: string) {
   await page.getByLabel(label, { exact: true }).click();
   // Wait until Node has the target and pushed it to the panel.
-  await page.waitForFunction(
+  await recorder.toolsPage!.waitForFunction(
     (l) => {
       const ui = (window as any).__qaPanelUi;
       return ui && (window as any).__lastTargetLabel === l;
@@ -62,8 +62,9 @@ before(async () => {
   });
   page = recorder.page;
   await page.waitForLoadState('load');
-  // Let tests know when Node pushed a new target.
-  await page.evaluate(() => {
+  // Let tests know when Node pushed a new target to the QA tools tab.
+  await recorder.toolsPage!.waitForFunction(() => (window as any).__qaPanelUi);
+  await recorder.toolsPage!.evaluate(() => {
     const ui = (window as any).__qaPanelUi;
     const original = ui.setTarget.bind(ui);
     ui.setTarget = (t: { label: string }) => {
@@ -206,25 +207,24 @@ test('looper repeats a captured flow with fresh data each time', async () => {
   assert.equal(posts.length, 4, 'API calls from each iteration are captured');
 });
 
-test('panel UI renders and is invisible to the recorder and to Playwright locators', async () => {
+test('QA tools render in their own tab, which is never recorded', async () => {
+  await focusField('Name');
   const before = actions().length;
-  await page.keyboard.press('Alt+Shift+D');
-  await page.waitForFunction(() => (window as any).__qaPanelUi._root.querySelector('[role=dialog] .tabs'));
-  const tabs = await page.evaluate(() =>
+  const tools = recorder.toolsPage!;
+  await tools.waitForFunction(() => (window as any).__qaPanelUi._root.querySelector('[role=main] .tabs'));
+  const tabs = await tools.evaluate(() =>
     Array.from((window as any).__qaPanelUi._root.querySelectorAll('[role=tab]')).map((b: any) => b.textContent),
   );
   assert.deepEqual(tabs, ['Faker', 'Boundaries', 'Edge cases', 'Profiles', 'Looper', 'Mock', 'Accessibility', 'Responsive', 'Bug']);
 
-  // Click the Edge cases tab inside the panel.
-  await page.evaluate(() => {
-    const root = (window as any).__qaPanelUi._root;
-    Array.from(root.querySelectorAll('[role=tab]')).find((b: any) => b.textContent === 'Edge cases')!.dispatchEvent(
-      new MouseEvent('click', { bubbles: true, composed: true }),
-    );
-  });
-  const rows = await page.evaluate(() => (window as any).__qaPanelUi._root.querySelectorAll('li').length);
-  assert.ok(rows > 10);
+  // Real clicks in the tools tab.
+  await tools.getByRole('tab', { name: 'Edge cases' }).click();
+  assert.ok((await tools.getByRole('button', { name: 'Fill' }).count()) > 10);
+  await tools.getByRole('button', { name: 'Fill' }).first().click();
 
-  assert.equal(actions().length, before, 'panel clicks are not recorded');
-  assert.equal(await page.getByRole('button', { name: 'Fill' }).count(), 0, 'Playwright cannot see panel buttons');
+  assert.equal(actions().length, before + 1, 'only the fill in the app is recorded, not the clicks in the tools tab');
+  assert.equal(actions().at(-1)!.pageId, 1, 'the fill happened in the app tab');
+  assert.equal(await page.locator('qa-recorder-panel').count(), 0, 'nothing is added to the app page');
+  assert.equal(await page.getByRole('button', { name: 'Fill' }).count(), 0, 'the app tab has no QA buttons');
+  assert.ok(!recorder.events.some((e) => 'url' in e && String(e.url).startsWith('http://qa-recorder.tools')), 'the tools tab is not in the timeline');
 });

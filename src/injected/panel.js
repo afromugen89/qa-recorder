@@ -1,13 +1,13 @@
-// qa-recorder test data panel. Injected into the top frame of every tab.
-// Plain JavaScript, rendered inside a closed shadow root so the app's CSS
-// can't reach it and Playwright locators can't match it. Generation and
-// filling happen in Node through the __qaPanel binding.
+// qa-recorder QA tools. Runs as the whole page of the QA tools tab, which the
+// recorder opens in a browser context of its own, so the tools never appear
+// in the app or in its screenshots. Plain JavaScript. Everything that touches
+// the app (filling, scans, bug reports) happens in Node through the
+// __qaPanel binding, on the app tab the tester used last.
 (() => {
   if (window !== window.top || window.__qaPanelUi) return;
 
-  const TAG = 'qa-recorder-panel';
   const state = {
-    open: false,
+    app: null,
     tab: 'faker',
     init: null,
     target: null,
@@ -100,17 +100,16 @@
   // ---------- styles ----------
 
   const CSS = `
-    :host { all: initial; }
+    html, body { margin: 0; height: 100%; background: #fff; color: #111827; }
     * { box-sizing: border-box; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
     .pill.warn { background: #b45309; }
     textarea.ta { width: 100%; font: 12px ui-monospace, Menlo, monospace; padding: 5px 6px; border: 1px solid #d1d5db; border-radius: 6px; color: #111827; background: #fff; }
-    .pill { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; background: #1f2937; color: #fff;
-      border: 0; border-radius: 999px; padding: 8px 14px; font-size: 13px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.3); }
-    .panel { position: fixed; right: 16px; bottom: 60px; z-index: 2147483647; width: 400px; max-width: calc(100vw - 32px);
-      max-height: calc(100vh - 80px); display: flex; flex-direction: column; background: #fff; color: #111827;
-      border: 1px solid #d1d5db; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.25); font-size: 13px; }
-    header { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
+    .panel { height: 100vh; display: flex; flex-direction: column; font-size: 13px; }
+    header { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border-bottom: 1px solid #e5e7eb; }
     header b { font-size: 14px; }
+    .app { padding: 6px 12px; border-bottom: 1px solid #e5e7eb; font-size: 12px; color: #374151; display: flex; gap: 6px; align-items: center; }
+    .app .url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; font-size: 11px; color: #4b5563; }
+    .mocks-on { margin: 0; border-radius: 0; background: #fef3c7; color: #92400e; padding: 6px 12px; font-size: 12px; }
     .target { padding: 8px 12px; background: #f9fafb; border-bottom: 1px solid #e5e7eb; font-size: 12px; color: #374151; }
     .target code { background: #eef2ff; padding: 1px 4px; border-radius: 4px; }
     .tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid #e5e7eb; }
@@ -162,14 +161,12 @@
 
   let root;
   function mount() {
-    if (root || !document.documentElement) return;
-    const host = document.createElement(TAG);
-    const attach = window.__qaRecorder && window.__qaRecorder.attachShadow;
-    root = attach ? attach(host, { mode: 'closed' }) : host.attachShadow({ mode: 'closed' });
-    document.documentElement.append(host);
+    if (root || !document.body) return;
+    root = h('div', { id: 'qa-tools' });
+    document.body.append(root);
     render();
-    // Show active mocks on the button even before the panel is opened.
-    call('mockState').then((m) => { state.mocks = m; render(); }).catch(() => undefined);
+    call('appInfo').then((app) => { state.app = app; render(); }).catch(() => undefined);
+    run(ensureInit);
   }
 
   async function ensureInit() {
@@ -293,7 +290,6 @@
     if (state.mockEdit) return mockEditor();
     const m = state.mocks;
     return h('div', null,
-      m.active ? h('div', { class: 'msg info', style: 'margin:0 0 6px' }, `${m.active} mock${m.active > 1 ? 's are' : ' is'} on. Matching API calls are being changed.`) : null,
       h('div', { class: 'actions', style: 'margin-top:0' },
         h('button', { class: 'b p', onclick: () => editRule(emptyRule()) }, 'New mock')),
       m.rules.length ? h('ul', null, m.rules.map((r) => h('li', null,
@@ -392,7 +388,7 @@
     for (const p of r.init.presets) (groups[p.group] = groups[p.group] || []).push(p);
     const picked = (b) => r.picked[b.width] !== false;
     return h('div', null,
-      h('h4', { style: 'margin-top:0' }, 'Resize this tab'),
+      h('h4', { style: 'margin-top:0' }, 'Resize the app tab'),
       h('div', { class: 'row' },
         h('select', { 'aria-label': 'Resize to', onchange: (e) => { r.resizeTo = e.target.value; } },
           r.init.presets.map((p) => h('option', { value: p.id, selected: r.resizeTo === p.id }, `${p.name} (${p.width}×${p.height})`))),
@@ -421,7 +417,7 @@
           h('input', { 'aria-label': 'Extra widths', placeholder: 'e.g. 360, 1024', value: r.widths, oninput: (e) => { r.widths = e.target.value; } }))),
       h('div', { class: 'checks', style: 'margin-top:4px' },
         h('label', null, h('input', { type: 'checkbox', checked: r.landscape, onchange: (e) => { r.landscape = e.target.checked; } }), 'Landscape'),
-        h('label', null, h('input', { type: 'checkbox', checked: r.current, onchange: (e) => { r.current = e.target.checked; } }), 'This tab as it is now'),
+        h('label', null, h('input', { type: 'checkbox', checked: r.current, onchange: (e) => { r.current = e.target.checked; } }), 'The app tab as it is now'),
         h('label', null, h('input', { type: 'checkbox', checked: r.fullPage, onchange: (e) => { r.fullPage = e.target.checked; } }), 'Full-page screenshots')),
 
       h('h4', null, 'CSS breakpoints (boundary value analysis)'),
@@ -488,12 +484,6 @@
             v.screenshot ? h('div', { class: 'muted' }, v.screenshot) : null) : null);
       })),
       h('div', { class: 'muted', style: 'margin-top:6px' }, 'Screenshots have numbered boxes on the problem elements. Added to the next bug report.'));
-  }
-
-  function toggle() {
-    state.open = !state.open;
-    if (state.open) run(ensureInit);
-    else render();
   }
 
   // ---------- views ----------
@@ -828,7 +818,7 @@
         h('label', null,
           h('input', { type: 'checkbox', checked: f.pageScreenshot, 'aria-label': 'Include screenshot of the page now',
             onchange: (e) => { f.pageScreenshot = e.target.checked; render(); } }),
-          h('span', null, 'The page as it is when you click Create (QA panel hidden)')),
+          h('span', null, 'The page as it is when you click Create')),
         shots.map((s) => {
           const stepGone = s.step && f.excludeSteps.includes(s.step);
           const on = !stepGone && !f.excludeScreenshots.includes(s.path);
@@ -908,15 +898,25 @@
         h('button', { class: 'b', disabled: state.busy, onclick: () => run(loadBugDraft) }, 'Refresh from recording')));
   }
 
+  function showApp() {
+    call('showApp').catch((error) => flash(error.message, 'error'));
+  }
+
+  function appView() {
+    const a = state.app;
+    return h('div', { class: 'app' },
+      h('span', null, a && a.tabs > 1 ? `Working on tab ${a.pageId}:` : 'Working on:'),
+      h('span', { class: 'url', title: a ? a.url : '' }, a ? a.url : 'no app tab open'),
+      h('button', { class: 'b auto', title: 'Switch to the app (Alt+Shift+D)', disabled: !a, onclick: showApp }, 'Go to app'));
+  }
+
   function render() {
     if (!root) return;
     // Keep scroll positions when redrawing (e.g. ticking a box in a long list).
     const scrolls = [...root.querySelectorAll('.body, [data-pick]')].map((el) => [el.dataset.pick || 'body', el.scrollTop]);
     root.replaceChildren(h('style', null, CSS));
     const mocksOn = state.mocks.active;
-    root.append(h('button', { class: `pill${mocksOn ? ' warn' : ''}`, title: 'QA recorder (Alt+Shift+D)', onclick: toggle },
-      `${state.open ? 'Close QA tools' : 'QA tools'}${mocksOn ? ` · ${mocksOn} mock${mocksOn > 1 ? 's' : ''} on` : ''}`));
-    if (!state.open) return;
+    document.title = `QA tools${mocksOn ? ` · ${mocksOn} mock${mocksOn > 1 ? 's' : ''} on` : ''}`;
     const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['mock', 'Mock'], ['a11y', 'Accessibility'], ['rwd', 'Responsive'], ['bug', 'Bug']];
     let body;
     if (!state.init) body = h('div', { class: 'muted' }, 'Loading…');
@@ -929,9 +929,11 @@
     else if (state.tab === 'a11y') body = a11yView();
     else if (state.tab === 'rwd') body = rwdView();
     else body = loopView();
-    root.append(h('div', { class: 'panel', role: 'dialog', 'aria-label': 'QA recorder' },
+    root.append(h('div', { class: 'panel', role: 'main', 'aria-label': 'QA recorder' },
       h('header', null, h('b', null, 'QA recorder'),
         h('span', { class: 'muted' }, state.init ? `seed ${state.init.seed}` : '')),
+      appView(),
+      mocksOn ? h('div', { class: 'msg mocks-on' }, `${mocksOn} mock${mocksOn > 1 ? 's are' : ' is'} on. Matching API calls are being changed.`) : null,
       targetView(),
       h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([id, label]) =>
         h('button', { class: state.tab === id ? 'on' : '', role: 'tab', onclick: () => { state.tab = id; state.message = null; render(); } }, label))),
@@ -950,6 +952,12 @@
       state.target = target;
       render();
     },
+    appChanged(app) {
+      // Each tab has its own focused field.
+      if (!app || (state.target && state.target.pageId !== app.pageId)) state.target = null;
+      state.app = app;
+      render();
+    },
     mocksChanged(mocks) {
       state.mocks = mocks;
       // Don't redraw under the QA while they edit a rule.
@@ -959,8 +967,10 @@
       state.loopStatus = status;
       render();
     },
-    open() {
-      if (!state.open) toggle();
+    /** Switch to a tab of the QA tools, e.g. open('a11y'). */
+    open(tab) {
+      if (tab) state.tab = tab;
+      render();
     },
     /** For qa-recorder's own tests. */
     get _root() {
@@ -968,10 +978,11 @@
     },
   };
 
+  // Alt+Shift+D switches back to the app (and, in the app, to these tools).
   window.addEventListener('keydown', (event) => {
     if (event.altKey && event.shiftKey && (event.key === 'D' || event.key === 'd' || event.code === 'KeyD')) {
       event.preventDefault();
-      toggle();
+      showApp();
     }
   }, true);
 

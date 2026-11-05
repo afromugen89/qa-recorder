@@ -229,7 +229,7 @@ export interface RecorderOptions {
   headless?: boolean;
   /** Path to a Chromium binary, if not using Playwright's bundled one. */
   executablePath?: string;
-  /** Show the test data panel in the page. Default true. */
+  /** Open the QA tools window. Default true. */
   panel?: boolean;
   /** Where data profiles are stored. Default ./.qa-recorder/profiles.json */
   profilesPath?: string;

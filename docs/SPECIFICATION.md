@@ -40,7 +40,7 @@ Primary users are QA testers. A secondary user is the automation engineer who ru
 | API call capture: status, response time, failures | Built | PR #1 |
 | Console errors, warnings and uncaught exceptions | Built | PR #1 |
 | Screenshots and HAR file | Built | PR #1 |
-| QA tools panel in the page | Built | PR #2, extended in #3, #4, #6 |
+| QA tools in their own window | Built | PR #2, extended in #3, #4, #6 |
 | Test data: Faker, boundaries, partitions, edge cases | Built | PR #2 |
 | Data profiles | Built | PR #2 |
 | Looper (repeat a flow with random data) | Built | PR #2 |
@@ -65,7 +65,7 @@ Primary users are QA testers. A secondary user is the automation engineer who ru
 - **Browser control:** the recorder launches Chromium through Playwright with one browser context. Network, console, page error and navigation events come from Playwright, so they do not depend on the page cooperating.
 - **Injected scripts** (added to every page and frame with `addInitScript`):
   - `src/injected/recorder.js` listens for user events in the capture phase, finds the real target through `composedPath()`, builds a locator, and sends the action to Node through a Playwright binding (`__qaRecord`).
-  - `src/injected/panel.js` draws the QA tools panel and talks to Node through `__qaPanel` and `__qaFocus`.
+  - `src/injected/panel.js` is the QA tools page. The recorder serves it at `http://qa-recorder.tools/` in a browser context of its own (no recorder script, mocks or HAR) and it talks to Node through `__qaPanel`. Commands act on the app tab the tester used last. Field focus arrives from the app through `__qaFocus`; Alt+Shift+D in the app calls `__qaShowTools`.
   - `src/injected/audit.js` runs the layout checks inside the page.
 - **Services in Node:** `DataService` (test data, profiles, looper), `MockService` (API mocking), `AuditService` (accessibility and layout), and the report builder (`src/report`).
 - **Storage:** one folder per session, plus shared team files under `.qa-recorder/` (profiles and mocks) that can be committed.
@@ -84,8 +84,8 @@ Primary users are QA testers. A secondary user is the automation engineer who ru
 | REC-06 | Record element details for the report: tag, type, id, name, role, accessible name and text. | Built |
 | REC-07 | Mask values typed into password fields and card fields (`autocomplete="cc-*"`) as `********` unless `--keep-secrets` is set. | Built |
 | REC-08 | Record navigations, and new tabs and popups, with a tab number (`pageId`) on every event. | Built |
-| REC-09 | Take a screenshot after each action (can be turned off) without disturbing the page: the QA tools panel stays on screen and appears in these screenshots, because hiding it made it flicker on every click. Bug report screenshots hide the panel. | Built |
-| REC-10 | Never record the QA tools panel's own clicks and typing, and keep the panel invisible to Playwright locators. | Built |
+| REC-09 | Take a screenshot after each action (can be turned off) without disturbing the page. The QA tools are in their own window, so these screenshots show only the app and nothing is hidden or restyled while they are taken. | Built |
+| REC-10 | Never record clicks and typing in the QA tools, and add nothing to the app's page. | Built |
 | REC-11 | Show each event live in the terminal, with failed calls, slow calls and errors highlighted. | Built |
 | REC-12 | Record as a phone or tablet using a Playwright device name (`--device "iPhone 15 Pro"`), with its size, touch, pixel ratio and user agent. `qa-recorder devices` lists the names. | Built |
 
@@ -111,14 +111,14 @@ Primary users are QA testers. A secondary user is the automation engineer who ru
 | ERR-03 | Record uncaught JavaScript exceptions with their stack trace. | Built |
 | ERR-04 | Link errors to the step that caused them in bug reports. | Built |
 
-### 4.4 QA tools panel
+### 4.4 QA tools
 
 | ID | Requirement | Status |
 | --- | --- | --- |
-| PNL-01 | Open the panel from a **QA tools** button at the bottom right of every page, or with **Alt+Shift+D**. `--no-panel` hides it. | Built |
+| PNL-01 | The QA tools open in their own window when recording starts. **Alt+Shift+D** switches between the app and the QA tools, and reopens them if closed. `--no-panel` turns them off. | Built |
 | PNL-02 | Tabs: Faker, Boundaries, Edge cases, Profiles, Looper, Mock, Accessibility, Responsive, Bug. | Built |
-| PNL-03 | The panel targets the field the tester last clicked into, including fields in iframes and shadow DOM. | Built |
-| PNL-04 | The button turns orange and shows a count while any API mock is on. | Built |
+| PNL-03 | The QA tools act on the app tab the tester last used (shown as "Working on") and target the field last clicked into there, including fields in iframes and shadow DOM. | Built |
+| PNL-04 | An orange line and the window title show a count while any API mock is on. | Built |
 
 ### 4.5 Test data
 
@@ -261,10 +261,10 @@ Team files in `.qa-recorder/`: `profiles.json` and `mocks.json`.
 | --- | --- | --- |
 | NFR-01 | **Privacy:** passwords and card values are masked by default. | Built |
 | NFR-02 | **Reproducibility:** generated data is seeded, and the seed is in the session and the report. | Built |
-| NFR-03 | **Isolation:** the panel and layout checks do not change what is recorded; layout checks run in a separate browser. | Built |
+| NFR-03 | **Isolation:** the QA tools and layout checks do not change what is recorded; layout checks run in a separate browser. | Built |
 | NFR-04 | **CI use:** headless recording and the `check` command with a non-zero exit code on failures. | Built |
 | NFR-05 | **Trust in reports:** mocked calls are always labelled so no bug is filed against a mock. | Built |
-| NFR-06 | **Tests:** `npm test` runs 74 tests across recorder, test data, panel, mocking, reports and audits against fixture pages in headless Chromium. `npm run typecheck` must pass. | Built |
+| NFR-06 | **Tests:** `npm test` runs 82 tests across recorder, test data, panel, mocking, reports and audits against fixture pages in headless Chromium. `npm run typecheck` must pass. | Built |
 
 ## 7. Known limitations
 
@@ -285,3 +285,4 @@ Team files in `.qa-recorder/`: `profiles.json` and `mocks.json`.
 | 2026-11-04 | #5 | User guide |
 | 2026-11-04 | #6 | Accessibility and responsive checks, `--device`, `check` command |
 | 2026-11-04 | | This specification |
+| 2026-11-05 | | QA tools move out of the page into their own window |

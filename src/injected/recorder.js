@@ -394,7 +394,21 @@
   }
 
   const KEYS = new Set(['Enter', 'Escape', 'Tab']);
+  function isToolsShortcut(event) {
+    return event.altKey && event.shiftKey && (event.key === 'D' || event.key === 'd' || event.code === 'KeyD');
+  }
+
   function onKeyDown(event) {
+    // Alt+Shift+D brings the QA tools tab forward. It is not a test step.
+    if (isToolsShortcut(event)) {
+      if (SEEN_EVENTS.has(event)) return;
+      SEEN_EVENTS.add(event);
+      event.preventDefault();
+      try {
+        if (typeof window.__qaShowTools === 'function') window.__qaShowTools();
+      } catch (_) { /* ignore */ }
+      return;
+    }
     if (!claim(event)) return;
     if (!KEYS.has(event.key)) return;
     const el = deepTarget(event);

@@ -38,7 +38,7 @@ Options:
 | `--include-documents` | | Also log full page loads, not just XHR and fetch |
 | `--headless` | | No window (for CI) |
 | `--executable <path>` | | Use a specific Chrome or Chromium binary |
-| `--no-panel` | | Hide the test data panel |
+| `--no-panel` | | Don't open the QA tools window |
 | `--profiles <file>` | `.qa-recorder/profiles.json` | Where data profiles are saved |
 | `--mocks <file>` | `.qa-recorder/mocks.json` | Where API mock rules are saved |
 | `--seed <n>` | random | Faker seed, to reproduce generated data |
@@ -46,7 +46,7 @@ Options:
 
 ## Test data panel
 
-While recording, press **Alt+Shift+D** or click **QA tools** at the bottom right of the page. Click into any field on the page (including fields in iframes and shadow DOM), then choose what goes in it. The panel is hidden from screenshots, isn't recorded, and Playwright locators can't see it.
+The QA tools open in their own window next to the site, so nothing is added to the page and they never appear in screenshots. Press **Alt+Shift+D** to switch between the site and the QA tools. Click into any field on the page (including fields in iframes and shadow DOM), then choose what goes in it. Clicks in the QA tools aren't recorded.
 
 | Tab | What it does | ISTQB technique tagged |
 | --- | --- | --- |
@@ -108,7 +108,7 @@ Each mock rule matches by **method** (or any) and **URL**. Plain text matches an
 - **Delay** any call by N ms to test loading states and timeouts.
 - **Only once:** the rule switches itself off after one use, for example to make just the first attempt fail.
 
-Rules are saved to `.qa-recorder/mocks.json` (change with `--mocks <file>`). Commit it and the team gets the same mocks. While any mock is on, the QA tools button turns orange and shows how many are on. Every mocked call is labelled in the terminal, in `session.json` (`"mock": { "rule": …, "changes": [...] }`) and in bug reports, which also warn that mocks were active so nobody files a bug caused by a mock.
+Rules are saved to `.qa-recorder/mocks.json` (change with `--mocks <file>`). Commit it and the team gets the same mocks. While any mock is on, the QA tools show how many are on, in an orange line and in the window title. Every mocked call is labelled in the terminal, in `session.json` (`"mock": { "rule": …, "changes": [...] }`) and in bug reports, which also warn that mocks were active so nobody files a bug caused by a mock.
 
 ## Accessibility and responsive checks
 
@@ -128,7 +128,7 @@ It writes a bug report and exits with code 1 on any accessibility violation or l
 
 ## Bug reports
 
-When you find a bug, open the panel (Alt+Shift+D), go to the **Bug** tab and choose **Start bug report**. The form is filled in from the recording:
+When you find a bug, switch to the QA tools (Alt+Shift+D), go to the **Bug** tab and choose **Start bug report**. The form is filled in from the recording:
 
 - **Title**, suggested from the most serious failure and the step that caused it, for example `GET /api/orders returns 500 after clicking "Save" button`.
 - **Actual result**, listing the failed API calls with their response, uncaught errors, console errors and slow calls.

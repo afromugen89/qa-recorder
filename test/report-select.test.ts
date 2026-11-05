@@ -122,20 +122,21 @@ test('screenshot preview only serves recorded screenshots', async () => {
     }
 
     // The Bug tab shows a checkbox per step and per screenshot.
-    await again.page.evaluate(() => (window as any).__qaPanelUi.open());
-    await again.page.waitForFunction(() => !(window as any).__qaPanelUi._root.textContent.includes('Loading…'));
-    await again.page.evaluate(() => {
-      const r = (window as any).__qaPanelUi._root as ShadowRoot;
+    const tools = again.toolsPage!;
+    await tools.evaluate(() => (window as any).__qaPanelUi.open());
+    await tools.waitForFunction(() => !(window as any).__qaPanelUi._root.textContent.includes('Loading…'));
+    await tools.evaluate(() => {
+      const r = (window as any).__qaPanelUi._root as HTMLElement;
       (Array.from(r.querySelectorAll('[role=tab]')).find((b) => b.textContent === 'Bug') as HTMLElement).click();
     });
-    await again.page.waitForFunction(() => (window as any).__qaPanelUi._root.textContent.includes('Start bug report'));
-    await again.page.evaluate(() => {
-      const r = (window as any).__qaPanelUi._root as ShadowRoot;
+    await tools.waitForFunction(() => (window as any).__qaPanelUi._root.textContent.includes('Start bug report'));
+    await tools.evaluate(() => {
+      const r = (window as any).__qaPanelUi._root as HTMLElement;
       (Array.from(r.querySelectorAll('button')).find((b) => b.textContent === 'Start bug report') as HTMLElement).click();
     });
-    await again.page.waitForFunction(() => (window as any).__qaPanelUi._root.querySelector('[data-pick=steps]'));
-    const counts = await again.page.evaluate(() => {
-      const r = (window as any).__qaPanelUi._root as ShadowRoot;
+    await tools.waitForFunction(() => (window as any).__qaPanelUi._root.querySelector('[data-pick=steps]'));
+    const counts = await tools.evaluate(() => {
+      const r = (window as any).__qaPanelUi._root as HTMLElement;
       return {
         steps: r.querySelectorAll('[data-pick=steps] input[type=checkbox]').length,
         shots: r.querySelectorAll('[data-pick=screenshots] input[type=checkbox]').length,

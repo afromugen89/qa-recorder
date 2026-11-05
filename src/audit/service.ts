@@ -12,7 +12,6 @@ export interface AuditHost {
   sessionDir: string;
   executablePath?: string;
   /** CSS for evidence screenshots: hides the QA panel. */
-  screenshotStyle: string;
   /** The seq the next event will get, for file names. */
   nextSeq(): number;
   pageIdOf(page: Page): number;
@@ -90,7 +89,7 @@ export class AuditService {
         (list) => (window as unknown as { __qaAudit: { boxesFor(l: unknown): unknown[] } }).__qaAudit.boxesFor(list),
         items.slice(0, 80),
       ).catch(() => []);
-      await annotatedScreenshot(page, boxes as never, join(this.host.sessionDir, file), { style: this.host.screenshotStyle });
+      await annotatedScreenshot(page, boxes as never, join(this.host.sessionDir, file));
     } catch {
       screenshot = undefined;
     }
@@ -104,7 +103,6 @@ export class AuditService {
       sessionDir: this.host.sessionDir,
       screenshotPrefix: `screenshots/layout-${String(this.host.nextSeq()).padStart(4, '0')}`,
       browser: () => this.browser(),
-      style: this.host.screenshotStyle,
     });
     const event = this.host.pushLayout({ pageId: this.host.pageIdOf(page), url: result.url, result });
     return { result, summary: layoutSummary(result), seq: event.seq };
