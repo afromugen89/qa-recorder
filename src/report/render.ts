@@ -132,7 +132,7 @@ export function renderMarkdown(r: BugReport, imageBase = '.'): string {
   if (r.screenshot || shots.length) {
     out.push('## Screenshots', '');
     if (r.screenshot) out.push(`When the bug was reported:`, '', `![Bug](${imageBase}/${r.screenshot})`, '');
-    for (const s of shots.slice(-5)) out.push(`After step ${s.number}:`, '', `![Step ${s.number}](${imageBase}/${s.screenshot})`, '');
+    for (const s of shots) out.push(`After step ${s.number}:`, '', `![Step ${s.number}](${imageBase}/${s.screenshot})`, '');
   }
 
   out.push('## Attachments', '', `- Full network log: \`${imageBase}/network.har\``, `- Full session timeline: \`${imageBase}/session.json\``, '');

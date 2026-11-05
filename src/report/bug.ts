@@ -26,10 +26,19 @@ export interface BugInput {
   toSeq?: number;
   /** Screenshot taken when the bug was marked, relative to the session folder. */
   screenshot?: string;
+  /**
+   * Steps to leave out, by `ReportStep.key`. Remaining steps are renumbered;
+   * API calls and errors from a left-out step are listed under the step before it.
+   */
+  excludeSteps?: string[];
+  /** Screenshots to leave out, by path relative to the session folder. */
+  excludeScreenshots?: string[];
 }
 
 export interface ReportStep {
   number: number;
+  /** Stable id for picking steps: the first recorded event's seq, or "start". */
+  key: string;
   text: string;
   /** Extra detail: test data technique, frame, shadow DOM. */
   detail?: string;
@@ -282,7 +291,7 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
   const opensPage = events.find((e) => e.type === 'navigation' || e.type === 'action');
   if (startUrl && opensPage?.type !== 'navigation') {
     // The report starts mid-session: say where the tester was.
-    steps.push({ number: 1, text: `Start on ${startUrl}`, url: startUrl, seqs: [] });
+    steps.push({ number: 1, key: 'start', text: `Start on ${startUrl}`, url: startUrl, seqs: [] });
     lastUrl = startUrl;
   }
   const loops = new Map<number, { step: ReportStep; iterations: Set<number>; actions: number }>();
@@ -292,7 +301,7 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
   for (const e of events) {
     if (e.type === 'navigation' && e.pageId === 1 && !e.newPage) {
       if (e.url !== lastUrl && e.url !== 'about:blank') {
-        const step: ReportStep = { number: steps.length + 1, text: `Open ${e.url}`, url: e.url, seqs: [e.seq] };
+        const step: ReportStep = { number: steps.length + 1, key: String(e.seq), text: `Open ${e.url}`, url: e.url, seqs: [e.seq] };
         steps.push(step);
         stepOfSeq.set(e.seq, step.number);
         lastUrl = e.url;
@@ -300,7 +309,7 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
       continue;
     }
     if (e.type === 'a11y' || e.type === 'layout' || e.type === 'viewport') {
-      const step: ReportStep = { number: steps.length + 1, text: describeCheck(e), seqs: [e.seq] };
+      const step: ReportStep = { number: steps.length + 1, key: String(e.seq), text: describeCheck(e), seqs: [e.seq] };
       if (e.type === 'a11y') {
         step.detail = a11ySummary(e.result);
         step.technique = 'checklist-based-testing';
@@ -313,7 +322,7 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
       continue;
     }
     if (e.type === 'navigation' && e.newPage) {
-      const step: ReportStep = { number: steps.length + 1, text: `A new tab opens: ${e.url}`, seqs: [e.seq] };
+      const step: ReportStep = { number: steps.length + 1, key: String(e.seq), text: `A new tab opens: ${e.url}`, seqs: [e.seq] };
       steps.push(step);
       stepOfSeq.set(e.seq, step.number);
       continue;
@@ -325,6 +334,7 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
         const end = loopEnds.get(e.loop.runId);
         const step: ReportStep = {
           number: steps.length + 1,
+          key: String(e.seq),
           text: '',
           detail: end ? `${end.passed ?? 0} of ${end.total ?? 0} iterations passed${end.stopped ? ' (stopped early)' : ''}` : undefined,
           technique: 'use-case-testing',
@@ -344,6 +354,7 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
     }
     const step: ReportStep = {
       number: steps.length + 1,
+      key: String(e.seq),
       text: describeAction(e),
       detail: actionDetail(e),
       technique: e.testData?.technique,
@@ -355,6 +366,31 @@ function buildSteps(events: TimelineEvent[], startUrl?: string): { steps: Report
     stepOfSeq.set(e.seq, step.number);
   }
   return { steps, stepOfSeq };
+}
+
+/**
+ * Drops the steps the QA left out and renumbers the rest. Events that belonged
+ * to a dropped step point at the kept step before it ("after step N").
+ */
+function selectSteps(
+  steps: ReportStep[], stepOfSeq: Map<number, number>, exclude: string[] = [], dropShots: Set<string>,
+): { steps: ReportStep[]; stepOfSeq: Map<number, number> } {
+  const skip = new Set(exclude);
+  const renumber = new Map<number, number>();
+  const kept: ReportStep[] = [];
+  for (const step of steps) {
+    if (!skip.has(step.key)) {
+      const { screenshot, ...rest } = step;
+      kept.push({ ...rest, number: kept.length + 1, ...(screenshot && !dropShots.has(screenshot) && { screenshot }) });
+    }
+    if (kept.length) renumber.set(step.number, kept.length);
+  }
+  const remapped = new Map<number, number>();
+  for (const [seq, n] of stepOfSeq) {
+    const m = renumber.get(n);
+    if (m !== undefined) remapped.set(seq, m);
+  }
+  return { steps: kept, stepOfSeq: remapped };
 }
 
 /** Plain-English step for a check or a resize. */
@@ -464,7 +500,10 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
   const to = input.toSeq ?? Infinity;
   const events = session.events.filter((e) => e.seq > from && e.seq <= to);
   const before = session.events.filter((e): e is NavigationEvent => e.type === 'navigation' && e.pageId === 1 && e.seq <= from);
-  const { steps, stepOfSeq } = buildSteps(events, before.at(-1)?.url);
+  const dropShots = new Set(input.excludeScreenshots ?? []);
+  const keepShot = (path?: string) => (path && !dropShots.has(path) ? path : undefined);
+  const built = buildSteps(events, before.at(-1)?.url);
+  const { steps, stepOfSeq } = selectSteps(built.steps, built.stepOfSeq, input.excludeSteps, dropShots);
 
   const network = events.filter((e): e is NetworkEvent => e.type === 'network');
   const toCall = (c: NetworkEvent): ReportApiCall => ({
@@ -497,13 +536,13 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     violations: e.result.violations,
     needsReview: e.result.needsReview.map((r) => ({ id: r.id, help: r.help, nodeCount: r.nodeCount, wcag: r.wcag })),
     passes: e.result.passes,
-    screenshot: e.screenshot,
+    screenshot: keepShot(e.screenshot),
   }));
   const layout: ReportLayoutCheck[] = checkEvents.filter((e): e is LayoutEvent => e.type === 'layout').map((e) => ({
     step: stepOfSeq.get(e.seq),
     url: e.url,
     summary: layoutSummary(e.result),
-    viewports: e.result.viewports,
+    viewports: e.result.viewports.map(({ screenshot, ...v }) => ({ ...v, ...(keepShot(screenshot) && { screenshot }) })),
   }));
   const lastResize = session.events.filter((e): e is ViewportEvent => e.type === 'viewport' && e.seq <= to).at(-1);
   const viewport = lastResize && !lastResize.reset
@@ -553,7 +592,7 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     mocks: summarizeMocks(network),
     accessibility,
     layout,
-    screenshot: input.screenshot,
+    screenshot: keepShot(input.screenshot),
     timeline: events,
   };
 }
@@ -570,6 +609,29 @@ function summarizeMocks(network: NetworkEvent[]): BugReport['mocks'] {
   return [...byRule.values()].map((m) => ({ rule: m.rule, calls: m.calls, changes: [...m.changes] }));
 }
 
+/** A screenshot the QA can choose to keep in or leave out of a report. */
+export interface ReportScreenshot {
+  path: string;
+  label: string;
+  /** Key of the step it belongs to; it goes when that step is left out. */
+  step?: string;
+}
+
+/** Every screenshot a report would include, in report order. */
+export function reportScreenshots(report: BugReport): ReportScreenshot[] {
+  const out: ReportScreenshot[] = [];
+  for (const s of report.steps) if (s.screenshot) out.push({ path: s.screenshot, label: `After step ${s.number}: ${s.text}`, step: s.key });
+  for (const a of report.accessibility) {
+    if (a.screenshot) out.push({ path: a.screenshot, label: `Accessibility issues outlined${a.step ? ` (step ${a.step})` : ''}` });
+  }
+  for (const c of report.layout) {
+    for (const v of c.viewports) {
+      if (v.screenshot) out.push({ path: v.screenshot, label: `Layout at ${v.width}×${v.height}${v.device ? ` (${v.device})` : ''}` });
+    }
+  }
+  return out;
+}
+
 /** Draft values for the panel's bug form. */
 export function bugDraft(session: SessionData, fromSeq = 0) {
   const report = buildBugReport(session, { fromSeq });
@@ -578,6 +640,9 @@ export function bugDraft(session: SessionData, fromSeq = 0) {
     actual: report.actual,
     techniques: report.techniques,
     steps: report.steps.length,
+    /** For the step and screenshot pickers. */
+    stepList: report.steps.map((s) => ({ key: s.key, number: s.number, text: s.text, screenshot: s.screenshot })),
+    screenshots: reportScreenshots(report),
     failedApiCalls: report.failedApiCalls.length,
     slowApiCalls: report.slowApiCalls.length,
     consoleErrors: report.consoleErrors.filter((e) => e.level === 'error').length,

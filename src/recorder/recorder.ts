@@ -1,4 +1,5 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -196,7 +197,7 @@ export class Recorder {
     await this.context.exposeBinding('__qaPanel', (source, command: { cmd: string; [key: string]: unknown }) => {
       if (command?.cmd?.startsWith('mock')) return this.mocks.handle(command);
       if (AuditService.COMMANDS.has(command?.cmd)) return this.audit.handle(source.page, command);
-      if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug') return this.handleBugCommand(source.page, command);
+      if (command?.cmd === 'bugDraft' || command?.cmd === 'createBug' || command?.cmd === 'bugShot') return this.handleBugCommand(source.page, command);
       return this.data.handle(source.page, command);
     });
     if (this.options.panel) await this.context.addInitScript({ content: PANEL_SCRIPT });
@@ -261,18 +262,20 @@ export class Recorder {
    * Writes a bug report (HTML, Markdown and JSON) from what has been recorded
    * so far, with a screenshot of the current page.
    */
-  async createBug(input: BugInput & { scope?: 'session' | 'since-last-bug'; page?: Page } = {}): Promise<WrittenReport> {
+  async createBug(
+    input: BugInput & { scope?: 'session' | 'since-last-bug'; page?: Page; /** false skips the screenshot of the page now. */ pageScreenshot?: boolean } = {},
+  ): Promise<WrittenReport> {
     const page = input.page && !input.page.isClosed() ? input.page : this.page;
     await this.settle();
     let screenshot: string | undefined;
-    if (!page.isClosed()) {
+    if (!page.isClosed() && input.pageScreenshot !== false) {
       screenshot = `screenshots/bug-${String(this.seq + 1).padStart(4, '0')}.png`;
       await page.screenshot({ path: join(this.sessionDir, screenshot), style: SCREENSHOT_STYLE }).catch(() => {
         screenshot = undefined;
       });
     }
     const fromSeq = input.fromSeq ?? (input.scope === 'since-last-bug' ? this.lastBugSeq : 0);
-    const { page: _page, scope: _scope, ...rest } = input;
+    const { page: _page, scope: _scope, pageScreenshot: _shot, ...rest } = input;
     const written = writeBugReport(this.sessionDir, this.snapshot(), { ...rest, fromSeq, screenshot });
     const bug = this.push<BugEvent>({
       type: 'bug',
@@ -308,7 +311,14 @@ export class Recorder {
           result: { ...bugDraft(this.snapshot(), scope === 'since-last-bug' ? this.lastBugSeq : 0), hasPreviousBug: this.lastBugSeq > 0 },
         };
       }
-      const input = (command.bug ?? {}) as BugInput & { scope?: 'session' | 'since-last-bug' };
+      if (command.cmd === 'bugShot') {
+        // Preview for the screenshot picker. Only files the recorder wrote.
+        const path = String(command.path ?? '');
+        if (!/^screenshots\/[\w.-]+\.png$/.test(path)) throw new Error('Not a recorded screenshot');
+        const data = await readFile(join(this.sessionDir, path));
+        return { ok: true, result: `data:image/png;base64,${data.toString('base64')}` };
+      }
+      const input = (command.bug ?? {}) as BugInput & { scope?: 'session' | 'since-last-bug'; pageScreenshot?: boolean };
       const written = await this.createBug({ ...input, page });
       return { ok: true, result: { title: written.report.title, dir: written.dir, html: written.html, markdown: written.markdown } };
     } catch (error) {

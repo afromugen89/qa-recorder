@@ -162,6 +162,7 @@ Every value the tool puts on the page is tagged on the recorded action (`testDat
 | BUG-08 | Warn in the report when API mocks were active and list which calls they changed. | Built |
 | BUG-09 | A later bug in the same session can cover the whole session or only what happened since the previous bug. The CLI accepts `--from-seq` and `--to-seq`. | Built |
 | BUG-10 | Write `report.html` (self-contained, screenshots embedded, printable), `report.md` (for Jira, GitHub or Azure DevOps) and `bug.json` to `recordings/<session>/bugs/<nn>-<title>/`. | Built |
+| BUG-12 | Before creating a report, the tester picks which reproduction steps go in (remaining steps are renumbered; API calls and errors from a left-out step stay, under the step before it) and which screenshots go in (step, accessibility and layout screenshots, and the page screenshot taken on Create), with a preview of each. The CLI accepts `--skip-steps` and `--skip-screenshots`. | Built |
 | BUG-11 | Send reports directly to Jira, GitHub Issues or Azure DevOps. | Not built |
 
 ### 4.8 API mocking
@@ -206,7 +207,7 @@ Every value the tool puts on the page is tagged on the recorded action (`testDat
 | --- | --- | --- |
 | CLI-01 | `qa-recorder record [url]` with options `--out`, `--slow`, `--no-screenshots`, `--keep-secrets`, `--no-warnings`, `--include-documents`, `--headless`, `--executable`, `--no-panel`, `--profiles`, `--mocks`, `--seed`, `--device`. Stop by closing the window or Ctrl+C. | Built |
 | CLI-02 | `qa-recorder check <url>` runs the accessibility and layout checks with no window (`--wcag`, `--level`, `--best-practices`, `--sizes`, `--widths`, `--breakpoints`, `--no-a11y`, `--no-layout`, `--out`, `--device`), writes a bug report, and exits with code 1 on any accessibility violation or layout error. | Built |
-| CLI-03 | `qa-recorder report <session-folder>` writes a bug report from a saved session (`--title`, `--expected`, `--actual`, `--notes`, `--severity`, `--priority`, `--technique`, `--reporter`, `--from-seq`, `--to-seq`). | Built |
+| CLI-03 | `qa-recorder report <session-folder>` writes a bug report from a saved session (`--title`, `--expected`, `--actual`, `--notes`, `--severity`, `--priority`, `--technique`, `--reporter`, `--from-seq`, `--to-seq`, `--skip-steps`, `--skip-screenshots`). | Built |
 | CLI-04 | `qa-recorder data …` generates test data (see DATA-11). | Built |
 | CLI-05 | `qa-recorder devices` lists device names for `--device`. | Built |
 

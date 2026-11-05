@@ -335,8 +335,12 @@ npx qa-recorder check https://your-app.example.com/checkout --wcag 2.2 --level A
    - **Actual result** listing the failed API calls with the server's response, uncaught errors, console errors and slow calls.
    - **ISTQB test technique**, ticked automatically based on the test data you used, with *(detected)* next to it.
 3. Fill in the **Expected result**, choose **Severity** (critical, major, minor, trivial) and **Priority** (high, medium, low), and add **Notes** if you want.
-4. Check the ISTQB technique. Tick or untick techniques if the detected one isn't right, for example tick *Decision table testing* or *State transition testing* if that's how you designed the test.
-5. Click **Create bug report**. The terminal prints a `BUG` line with the path to the report.
+4. Under **Reproduction steps**, untick any step that isn't needed to reproduce the bug, such as a wrong click you corrected. The remaining steps are renumbered in the report. API calls and errors from a left-out step stay in the report, listed under the step before it, so no evidence is lost.
+5. Under **Screenshots**, untick any screenshot you don't want in the report. Click **Preview** to look at one first. *The page as it is when you click Create* is the screenshot taken at that moment, with the QA panel hidden. Screenshots of left-out steps are dropped too. **All** and **None** tick or untick the whole list.
+
+   ![Picking steps and screenshots](images/panel-bug-pick.png)
+6. Check the ISTQB technique. Tick or untick techniques if the detected one isn't right, for example tick *Decision table testing* or *State transition testing* if that's how you designed the test.
+7. Click **Create bug report**. The terminal prints a `BUG` line with the path to the report.
 
 ![Bug tab](images/panel-bug.png)
 
@@ -403,6 +407,8 @@ npx qa-recorder report recordings/2026-11-04_09-15-02 \
 | `--technique` | Comma-separated: `bva`, `ep`, `dt` (decision table), `st` (state transition), `eg` (error guessing), `exploratory`, `checklist`, `use-case`, `random`. Detected automatically if left out. |
 | `--reporter <name>` | Your name on the report. |
 | `--from-seq <n>`, `--to-seq <n>` | Only include part of the timeline. |
+| `--skip-steps <n,n>` | Leave these step numbers out. Use the numbers from a report written without this option; the remaining steps are renumbered. |
+| `--skip-screenshots <path,path>` | Leave these screenshots out, for example `screenshots/0004-click.png`. |
 
 ## 11. Find your recordings
 

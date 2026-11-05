@@ -21,7 +21,11 @@
     loop: { iterations: 5, delayMs: 500, reload: false, values: {} },
     loopStatus: null,
     bug: null,
-    bugForm: { scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', actual: '', notes: '', techniques: [] },
+    bugForm: {
+      scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', actual: '', notes: '', techniques: [],
+      excludeSteps: [], excludeScreenshots: [], pageScreenshot: true,
+    },
+    bugPreview: {},
     lastBug: null,
     mocks: { rules: [], active: 0, recent: [] },
     mockEdit: null,
@@ -144,6 +148,13 @@
     .msg.error { background: #fef2f2; color: #991b1b; }
     .msg.ok { background: #f0fdf4; color: #166534; }
     .muted { color: #6b7280; font-size: 12px; }
+    .pick { max-height: 200px; overflow: auto; border: 1px solid #e5e7eb; border-radius: 6px; padding: 2px 6px; }
+    .pick label { display: flex; gap: 6px; align-items: flex-start; font-size: 12px; padding: 3px 0; }
+    .pick label.off { color: #9ca3af; text-decoration: line-through; }
+    .pick .shot { display: flex; gap: 6px; align-items: flex-start; border-top: 1px solid #f3f4f6; }
+    .pick .shot label { flex: 1; min-width: 0; }
+    .pick img { display: block; max-width: 100%; margin: 2px 0 6px; border: 1px solid #e5e7eb; border-radius: 4px; }
+    button.link { border: 0; background: none; color: #4f46e5; cursor: pointer; font-size: 12px; padding: 3px 0; white-space: nowrap; }
     h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }
   `;
 
@@ -772,6 +783,68 @@
     state.bugForm.techniques = draft.techniques.map((t) => t.id);
   }
 
+  function toggleIn(list, item, on) {
+    return on ? list.filter((x) => x !== item) : list.includes(item) ? list : [...list, item];
+  }
+
+  function bugStepsView() {
+    const f = state.bugForm;
+    const steps = state.bug.stepList || [];
+    if (!steps.length) return null;
+    const kept = steps.filter((s) => !f.excludeSteps.includes(s.key)).length;
+    return h('div', null,
+      h('h4', null, `Reproduction steps (${kept} of ${steps.length})`),
+      h('div', { class: 'row', style: 'margin-bottom:4px' },
+        h('span', { class: 'muted' }, 'Untick steps that are not needed to reproduce the bug.'),
+        h('button', { class: 'link auto', onclick: () => { f.excludeSteps = []; render(); } }, 'All'),
+        h('button', { class: 'link auto', onclick: () => { f.excludeSteps = steps.map((s) => s.key); render(); } }, 'None')),
+      h('div', { class: 'pick', 'data-pick': 'steps' }, steps.map((s) => {
+        const on = !f.excludeSteps.includes(s.key);
+        return h('label', { class: on ? '' : 'off' },
+          h('input', {
+            type: 'checkbox', checked: on, 'aria-label': `Include step ${s.number}`,
+            onchange: (e) => { f.excludeSteps = toggleIn(f.excludeSteps, s.key, e.target.checked); render(); },
+          }),
+          h('span', null, `${s.number}. ${s.text}`));
+      })));
+  }
+
+  function bugShotsView() {
+    const f = state.bugForm;
+    const shots = state.bug.screenshots || [];
+    const preview = (path) => run(async () => {
+      if (state.bugPreview[path]) delete state.bugPreview[path];
+      else state.bugPreview[path] = await call('bugShot', { path });
+    });
+    const kept = shots.filter((s) => !f.excludeScreenshots.includes(s.path) && !(s.step && f.excludeSteps.includes(s.step))).length
+      + (f.pageScreenshot ? 1 : 0);
+    return h('div', null,
+      h('h4', null, `Screenshots (${kept} of ${shots.length + 1})`),
+      shots.length ? h('div', { class: 'row', style: 'margin-bottom:4px' },
+        h('span', { class: 'muted' }, 'Screenshots of left-out steps are dropped too.'),
+        h('button', { class: 'link auto', onclick: () => { f.excludeScreenshots = []; f.pageScreenshot = true; render(); } }, 'All'),
+        h('button', { class: 'link auto', onclick: () => { f.excludeScreenshots = shots.map((s) => s.path); f.pageScreenshot = false; render(); } }, 'None')) : null,
+      h('div', { class: 'pick', 'data-pick': 'screenshots' },
+        h('label', null,
+          h('input', { type: 'checkbox', checked: f.pageScreenshot, 'aria-label': 'Include screenshot of the page now',
+            onchange: (e) => { f.pageScreenshot = e.target.checked; render(); } }),
+          h('span', null, 'The page as it is when you click Create (QA panel hidden)')),
+        shots.map((s) => {
+          const stepGone = s.step && f.excludeSteps.includes(s.step);
+          const on = !stepGone && !f.excludeScreenshots.includes(s.path);
+          return h('div', null,
+            h('div', { class: 'shot' },
+              h('label', { class: on ? '' : 'off' },
+                h('input', {
+                  type: 'checkbox', checked: on, disabled: stepGone, 'aria-label': `Include screenshot ${s.label}`,
+                  onchange: (e) => { f.excludeScreenshots = toggleIn(f.excludeScreenshots, s.path, e.target.checked); render(); },
+                }),
+                h('span', null, s.label)),
+              h('button', { class: 'link', disabled: state.busy, onclick: () => preview(s.path) }, state.bugPreview[s.path] ? 'Hide' : 'Preview')),
+            state.bugPreview[s.path] ? h('img', { src: state.bugPreview[s.path], alt: s.label }) : null);
+        })));
+  }
+
   function bugView() {
     if (!state.bug) {
       return h('div', null,
@@ -806,6 +879,8 @@
         h('div', null, h('label', { class: 'f' }, 'Priority'),
           h('select', { 'aria-label': 'Priority', onchange: set('priority') },
             ['high', 'medium', 'low'].map((v) => h('option', { value: v, selected: f.priority === v }, v))))),
+      bugStepsView(),
+      bugShotsView(),
       h('h4', null, 'ISTQB test technique'),
       h('div', null, state.init.techniques.map((t) => h('label', { style: 'display:block;font-size:12px;margin:2px 0' },
         h('input', {
@@ -822,7 +897,11 @@
             const r = await call('createBug', { bug: { ...f } });
             state.lastBug = r;
             state.bug = null;
-            state.bugForm = { ...state.bugForm, title: '', expected: '', actual: '', notes: '', scope: 'since-last-bug' };
+            state.bugForm = {
+              ...state.bugForm, title: '', expected: '', actual: '', notes: '', scope: 'since-last-bug',
+              excludeSteps: [], excludeScreenshots: [], pageScreenshot: true,
+            };
+            state.bugPreview = {};
             flash(`Saved "${r.title}" to ${r.html}`, 'ok');
           }),
         }, 'Create bug report'),
@@ -831,6 +910,8 @@
 
   function render() {
     if (!root) return;
+    // Keep scroll positions when redrawing (e.g. ticking a box in a long list).
+    const scrolls = [...root.querySelectorAll('.body, [data-pick]')].map((el) => [el.dataset.pick || 'body', el.scrollTop]);
     root.replaceChildren(h('style', null, CSS));
     const mocksOn = state.mocks.active;
     root.append(h('button', { class: `pill${mocksOn ? ' warn' : ''}`, title: 'QA recorder (Alt+Shift+D)', onclick: toggle },
@@ -856,6 +937,10 @@
         h('button', { class: state.tab === id ? 'on' : '', role: 'tab', onclick: () => { state.tab = id; state.message = null; render(); } }, label))),
       state.message ? h('div', { class: `msg ${state.message.kind}` }, state.message.text) : null,
       h('div', { class: 'body' }, body)));
+    for (const [id, top] of scrolls) {
+      const el = id === 'body' ? root.querySelector('.body') : root.querySelector(`[data-pick="${id}"]`);
+      if (el) el.scrollTop = top;
+    }
   }
 
   // ---------- API for Node ----------
