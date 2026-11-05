@@ -10,6 +10,7 @@ import {
 import { ISTQB_TECHNIQUES, techniqueName, type TechniqueId } from './data/techniques.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { buildBugReport } from './report/bug.js';
 import { writeBugReport } from './report/render.js';
 import { devices } from 'playwright';
 import { a11ySummary, type WcagLevel, type WcagVersion } from './audit/a11y.js';
@@ -35,7 +36,7 @@ Record options:
   --include-documents    Also log page loads, not just XHR and fetch calls
   --headless             Run without a window (for CI)
   --executable <path>    Use this Chromium or Chrome binary
-  --no-panel             Hide the in-page test data panel (Alt+Shift+D)
+  --no-panel             Don't open the QA tools window (Alt+Shift+D)
   --profiles <file>      Data profiles file (default: .qa-recorder/profiles.json)
   --mocks <file>         API mock rules file (default: .qa-recorder/mocks.json)
   --seed <n>             Faker seed, to reproduce generated data
@@ -57,6 +58,8 @@ Report options:
   --severity critical|major|minor|trivial  --priority high|medium|low
   --technique bva,ep,dt,st,eg,exploratory,checklist,use-case,random
   --reporter <name>  --from-seq <n>  --to-seq <n>
+  --skip-steps <n,n>        Leave these step numbers out (remaining steps are renumbered)
+  --skip-screenshots <p,p>  Leave these screenshots out, e.g. screenshots/0004-click.png
 
 Data commands:
   data types                               List Faker data types
@@ -172,7 +175,7 @@ async function record(argv: string[]): Promise<void> {
     },
   });
 
-  console.log(`Test data panel: press Alt+Shift+D in the page, or click "QA tools" (seed ${recorder.data.generator.seed}).`);
+  if (recorder.toolsPage) console.log(`QA tools are in their own window. Alt+Shift+D switches between them and the app (seed ${recorder.data.generator.seed}).`);
   const activeMocks = recorder.mocks.activeCount();
   if (activeMocks) console.log(color(33)(`${activeMocks} API mock${activeMocks > 1 ? 's are' : ' is'} on (from ${relative(process.cwd(), recorder.mocks.state().path)}).`));
   console.log(`Recording. Close the browser or press Ctrl+C to stop.\nSaving to ${relative(process.cwd(), recorder.sessionDir) || '.'}\n`);
@@ -314,6 +317,8 @@ function report(argv: string[]): void {
       reporter: { type: 'string' },
       'from-seq': { type: 'string' },
       'to-seq': { type: 'string' },
+      'skip-steps': { type: 'string' },
+      'skip-screenshots': { type: 'string' },
     },
   });
   const dir = positionals[0];
@@ -330,6 +335,16 @@ function report(argv: string[]): void {
   const priorities = ['high', 'medium', 'low'];
   if (values.severity && !severities.includes(values.severity)) throw new Error(`--severity must be one of ${severities.join(', ')}`);
   if (values.priority && !priorities.includes(values.priority)) throw new Error(`--priority must be one of ${priorities.join(', ')}`);
+  const fromSeq = values['from-seq'] ? Number(values['from-seq']) : undefined;
+  const toSeq = values['to-seq'] ? Number(values['to-seq']) : undefined;
+  // Step numbers as they appear in the full report; turned into stable keys.
+  const allSteps = buildBugReport(session, { fromSeq, toSeq }).steps;
+  const excludeSteps = values['skip-steps']?.split(',').map((t) => {
+    const step = allSteps.find((s) => s.number === Number(t.trim()));
+    if (!step) throw new Error(`--skip-steps: there is no step ${t.trim()} (the report has ${allSteps.length})`);
+    return step.key;
+  });
+  const excludeScreenshots = values['skip-screenshots']?.split(',').map((t) => t.trim().replace(/\\/g, '/'));
   const written = writeBugReport(dir, session, {
     title: values.title,
     expected: values.expected,
@@ -339,8 +354,10 @@ function report(argv: string[]): void {
     priority: values.priority as never,
     techniques,
     reporter: values.reporter,
-    fromSeq: values['from-seq'] ? Number(values['from-seq']) : undefined,
-    toSeq: values['to-seq'] ? Number(values['to-seq']) : undefined,
+    fromSeq,
+    toSeq,
+    excludeSteps,
+    excludeScreenshots,
   });
   const r = written.report;
   console.log(`${green('Bug report:')} ${r.title}`);

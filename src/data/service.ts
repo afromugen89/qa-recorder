@@ -58,6 +58,8 @@ export interface DataHost {
   setLoopContext(context: { runId: number; iteration: number } | undefined): void;
   pushLoopEvent(event: Omit<LoopEvent, 'seq' | 'timestamp' | 'elapsedMs' | 'type'>): void;
   waitForApiIdle(timeoutMs: number): Promise<void>;
+  /** Calls a method on the QA tools UI. */
+  notify(method: string, payload: unknown): void;
 }
 
 const TECHNIQUE_FOR_KIND: Record<string, TechniqueId> = {
@@ -99,9 +101,7 @@ export class DataService {
     const pageId = this.host.pageIdOf(page);
     const target: FieldTarget = { ...payload, frame, framePath };
     this.targets.set(pageId, target);
-    await page.mainFrame()
-      .evaluate((t) => (window as unknown as { __qaPanelUi?: { setTarget(t: unknown): void } }).__qaPanelUi?.setTarget(t), this.describeTarget(target))
-      .catch(() => undefined);
+    this.host.notify('setTarget', { pageId, ...this.describeTarget(target) });
   }
 
   private describeTarget(t: FieldTarget) {
@@ -141,7 +141,7 @@ export class DataService {
           locales: listLocales(),
           techniques: Object.entries(ISTQB_TECHNIQUES).map(([id, t]) => ({ id, name: t.name })),
           edgeCases: edgeCases(),
-          target: this.targets.has(pageId) ? this.describeTarget(this.targets.get(pageId)!) : null,
+          target: this.targets.has(pageId) ? { pageId, ...this.describeTarget(this.targets.get(pageId)!) } : null,
           profiles: this.loadProfiles(),
           capture: this.captureState(),
           seed: this.generator.seed,
@@ -187,19 +187,13 @@ export class DataService {
         this.capture = undefined;
         return this.captureState();
       case 'loopRun':
-        return this.runLoop(c.options as LoopRunOptions, (status) => this.pushStatus(page, status));
+        return this.runLoop(c.options as LoopRunOptions, (status) => this.host.notify('loopStatus', status));
       case 'loopStop':
         if (this.running) this.running.stop = true;
         return true;
       default:
         throw new Error(`Unknown command ${c.cmd}`);
     }
-  }
-
-  private pushStatus(page: Page, status: unknown) {
-    void page.mainFrame()
-      .evaluate((s) => (window as unknown as { __qaPanelUi?: { loopStatus(s: unknown): void } }).__qaPanelUi?.loopStatus(s), status)
-      .catch(() => undefined);
   }
 
   // ---------- filling ----------

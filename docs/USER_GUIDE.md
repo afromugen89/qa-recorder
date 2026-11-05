@@ -9,7 +9,7 @@ This guide is for testers using the app. For how it works inside, see the [READM
 1. [Install](#1-install)
 2. [Start a recording](#2-start-a-recording)
 3. [What gets recorded](#3-what-gets-recorded)
-4. [The QA tools panel](#4-the-qa-tools-panel)
+4. [The QA tools window](#4-the-qa-tools-window)
 5. [Fill fields with test data](#5-fill-fields-with-test-data)
 6. [Repeat a flow with the Looper](#6-repeat-a-flow-with-the-looper)
 7. [Mock API calls](#7-mock-api-calls)
@@ -78,7 +78,7 @@ Put options after the `--`, for example `npm run record -- https://your-app.exam
 | `--keep-secrets` | Record password and card numbers as typed. By default they are masked. |
 | `--no-warnings` | Only log console errors, not warnings. |
 | `--include-documents` | Also log full page loads, not only XHR and fetch calls. |
-| `--no-panel` | Hide the QA tools panel. |
+| `--no-panel` | Don't open the QA tools window. |
 | `--seed <n>` | Reuse a previous seed so generated test data comes out the same. |
 | `--mocks <file>` | Use a different mock rules file. Default `.qa-recorder/mocks.json`. |
 | `--profiles <file>` | Use a different data profiles file. Default `.qa-recorder/profiles.json`. |
@@ -102,15 +102,21 @@ You don't need to do anything special. Everything below is captured as you test.
 
 **Privacy:** values typed into password and card number fields are masked unless you start with `--keep-secrets`.
 
-## 4. The QA tools panel
+## 4. The QA tools window
 
-Press **Alt+Shift+D** in the page, or click the **QA tools** button at the bottom right. Press it again or click **Close QA tools** to hide it.
+The QA tools open in a window of their own, titled **QA tools**, next to the site you're testing. Nothing is added to the site's page, so the screenshots QA Recorder takes after each step and for bug reports show only the site.
 
-The panel has nine tabs: **Faker**, **Boundaries**, **Edge cases**, **Profiles**, **Looper**, **Mock**, **Accessibility**, **Responsive** and **Bug**.
+- Put the two windows side by side, or switch between them.
+- Press **Alt+Shift+D** in the site to bring the QA tools forward. Press it in the QA tools (or click **Go to app**) to go back to the site.
+- If you close the QA tools window, press **Alt+Shift+D** in the site to open it again. Closing it does not stop the recording; closing the site's window does.
 
-The panel is part of QA Recorder, not of the site you're testing. It's left out of the bug report screenshot (it can show in the screenshots taken after each step), your clicks in it aren't recorded as test steps, and it can't affect the site's own tests.
+The top of the window shows which page the tools work on (**Working on:**). That is the tab you last clicked or typed in. If the site opens a new tab or popup, the tools follow it.
 
-The top of the panel shows which field values will go into. **Click into a field on the page first**, then use the panel. The panel reads the field's rules (type, `maxlength`, `min`, `max`, `required` and so on) and shows them next to the field name.
+The QA tools have nine tabs: **Faker**, **Boundaries**, **Edge cases**, **Profiles**, **Looper**, **Mock**, **Accessibility**, **Responsive** and **Bug**.
+
+The QA tools are part of QA Recorder, not of the site you're testing. Your clicks in them aren't recorded as test steps, they never appear in screenshots, and they can't affect the site's own tests.
+
+Below that, the window shows which field values will go into. **Click into a field on the page first**, then use the QA tools. They read the field's rules (type, `maxlength`, `min`, `max`, `required` and so on) and shows them next to the field name.
 
 ## 5. Fill fields with test data
 
@@ -225,7 +231,7 @@ The tab lists recent API calls. Click **Mock this** next to one. The URL and met
 
 ### Keep track of what's mocked
 
-While any mock is on, the **QA tools** button turns orange and shows how many are on, for example *QA tools · 2 mocks on*. The terminal also says how many mocks are on when recording starts. Every mocked call is marked `[mocked: <rule name>]` in the terminal and labelled in `session.json` and in bug reports. Reports also warn when mocks were active, so nobody files a bug that the mock caused.
+While any mock is on, the QA tools show an orange line saying how many are on, and the window title changes to, for example, *QA tools · 2 mocks on*. The terminal also says how many mocks are on when recording starts. Every mocked call is marked `[mocked: <rule name>]` in the terminal and labelled in `session.json` and in bug reports. Reports also warn when mocks were active, so nobody files a bug that the mock caused.
 
 Rules are saved to `.qa-recorder/mocks.json` and stay there between recordings. Commit or share that file and your team gets the same mocks. **Remember to turn mocks off** when you go back to normal testing.
 
@@ -335,8 +341,12 @@ npx qa-recorder check https://your-app.example.com/checkout --wcag 2.2 --level A
    - **Actual result** listing the failed API calls with the server's response, uncaught errors, console errors and slow calls.
    - **ISTQB test technique**, ticked automatically based on the test data you used, with *(detected)* next to it.
 3. Fill in the **Expected result**, choose **Severity** (critical, major, minor, trivial) and **Priority** (high, medium, low), and add **Notes** if you want.
-4. Check the ISTQB technique. Tick or untick techniques if the detected one isn't right, for example tick *Decision table testing* or *State transition testing* if that's how you designed the test.
-5. Click **Create bug report**. The terminal prints a `BUG` line with the path to the report.
+4. Under **Reproduction steps**, untick any step that isn't needed to reproduce the bug, such as a wrong click you corrected. The remaining steps are renumbered in the report. API calls and errors from a left-out step stay in the report, listed under the step before it, so no evidence is lost.
+5. Under **Screenshots**, untick any screenshot you don't want in the report. Click **Preview** to look at one first. *The page as it is when you click Create* is the screenshot of the app taken at that moment. Screenshots of left-out steps are dropped too. **All** and **None** tick or untick the whole list.
+
+   ![Picking steps and screenshots](images/panel-bug-pick.png)
+6. Check the ISTQB technique. Tick or untick techniques if the detected one isn't right, for example tick *Decision table testing* or *State transition testing* if that's how you designed the test.
+7. Click **Create bug report**. The terminal prints a `BUG` line with the path to the report.
 
 ![Bug tab](images/panel-bug.png)
 
@@ -403,6 +413,8 @@ npx qa-recorder report recordings/2026-11-04_09-15-02 \
 | `--technique` | Comma-separated: `bva`, `ep`, `dt` (decision table), `st` (state transition), `eg` (error guessing), `exploratory`, `checklist`, `use-case`, `random`. Detected automatically if left out. |
 | `--reporter <name>` | Your name on the report. |
 | `--from-seq <n>`, `--to-seq <n>` | Only include part of the timeline. |
+| `--skip-steps <n,n>` | Leave these step numbers out. Use the numbers from a report written without this option; the remaining steps are renumbered. |
+| `--skip-screenshots <path,path>` | Leave these screenshots out, for example `screenshots/0004-click.png`. |
 
 ## 11. Find your recordings
 
@@ -459,7 +471,7 @@ What it does today: every recorded action in `session.json` carries a Playwright
 
 - **The panel doesn't show the field I clicked.** Click directly into the input on the page (not its label) and check the field name at the top of the panel.
 - **A value was cut short.** The field has a `maxlength`. Tick **Ignore maxlength** on the Boundaries tab to send the full value.
-- **The app behaves strangely, or API calls return odd data.** Check whether the QA tools button is orange. If it is, a mock is on. Turn it off on the Mock tab.
+- **The app behaves strangely, or API calls return odd data.** Check the top of the QA tools window. If it has an orange line, a mock is on. Turn it off on the Mock tab.
 - **I want different data but the same steps.** Start a new recording without `--seed`. To get the *same* data, reuse the seed from the panel or `session.json`.
 - **Too many yellow warnings in the terminal.** Start with `--no-warnings` to log console errors only.
 - **Everything is flagged as slow.** Raise the threshold, for example `--slow 2000`.
