@@ -22,7 +22,7 @@
     loopStatus: null,
     bug: null,
     bugForm: {
-      scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', notes: '', techniques: [],
+      scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', actual: '', notes: '', techniques: [],
       excludeSteps: [], excludeScreenshots: [], pageScreenshot: true,
       // Optional API sections. Response times are off unless the QA wants them.
       sections: { failedApiCalls: true, slowApiCalls: true, apiResponseTimes: false },
@@ -934,6 +934,7 @@
       h('label', { class: 'f' }, 'Title'),
       h('input', { 'aria-label': 'Bug title', placeholder: 'Describe the bug in one line', value: f.title, oninput: set('title') }),
       area('expected', 'Expected result', 2),
+      area('actual', 'Actual result', 3),
       h('div', { class: 'row' },
         h('div', null, h('label', { class: 'f' }, 'Severity'),
           h('select', { 'aria-label': 'Severity', onchange: set('severity') },
@@ -962,7 +963,7 @@
             state.lastBug = r;
             state.bug = null;
             state.bugForm = {
-              ...state.bugForm, title: '', expected: '', notes: '', scope: 'since-last-bug',
+              ...state.bugForm, title: '', expected: '', actual: '', notes: '', scope: 'since-last-bug',
               excludeSteps: [], excludeScreenshots: [], pageScreenshot: true, excludeApiCalls: [], excludeEndpoints: [],
             };
             state.bugPreview = {};

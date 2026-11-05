@@ -106,6 +106,7 @@ function blocks(r: BugReport, attachments: JiraAttachment[]): Block[] {
   else out.push({ p: [{ i: 'No steps recorded.' }] });
 
   out.push({ h: 'Expected result' }, { p: [r.expected ?? 'Not stated.'] });
+  out.push({ h: 'Actual result' }, { p: [r.actual ?? 'Not stated.'] });
 
   out.push({ h: 'Test design technique (ISTQB)' });
   out.push({ ul: r.techniques.map((t) => [{ b: t.name }, `${t.reason ? `: ${t.reason}` : ''}${t.detected ? '' : ' (set by tester)'}`]) });

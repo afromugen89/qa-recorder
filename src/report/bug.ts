@@ -13,6 +13,7 @@ export type Priority = 'high' | 'medium' | 'low';
 export interface BugInput {
   title?: string;
   expected?: string;
+  actual?: string;
   severity?: Severity;
   priority?: Priority;
   /** Overrides the detected techniques. */
@@ -128,6 +129,7 @@ export interface BugReport {
   };
   steps: ReportStep[];
   expected?: string;
+  actual?: string;
   notes?: string;
   failedApiCalls: ReportApiCall[];
   slowApiCalls: ReportApiCall[];
@@ -564,6 +566,7 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     },
     steps,
     expected: input.expected?.trim() || undefined,
+    actual: input.actual?.trim() || undefined,
     notes: input.notes?.trim() || undefined,
     failedApiCalls,
     slowApiCalls,

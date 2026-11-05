@@ -112,7 +112,8 @@ test('links failed API calls and console errors to the step that caused them', (
   assert.match(fail.responseBody ?? '', /Database timeout/);
   const consoleError = first.report.consoleErrors.find((e) => e.text === 'Order failed to load');
   assert.equal(consoleError?.step, fail.step);
-  assert.equal((first.report as any).actual, undefined);
+  // Actual result is not suggested; it stays empty unless the QA types it.
+  assert.equal(first.report.actual, undefined);
 });
 
 test('reports slow calls and API response times per endpoint', () => {
@@ -133,10 +134,10 @@ test('a report scoped after the previous bug starts where the tester was', () =>
 
 test('Markdown is ready for Jira and HTML is self-contained', () => {
   const md = readFileSync(first.markdown, 'utf8');
-  for (const heading of ['## Steps to reproduce', '## Expected result', '## Test design technique (ISTQB)', '## Failed API calls', '## API response times']) {
+  for (const heading of ['## Steps to reproduce', '## Expected result', '## Actual result', '## Test design technique (ISTQB)', '## Failed API calls', '## API response times']) {
     assert.ok(md.includes(heading), heading);
   }
-  assert.ok(!md.includes('Actual result'));
+  assert.match(md, /## Actual result\n\n_Not stated\._/);
   assert.match(md, /\*\*Test technique \(ISTQB\):\*\* Boundary value analysis/);
   assert.match(md, /!\[Bug\]\(\.\.\/\.\.\/screenshots\/bug-\d+\.png\)/);
   const html = readFileSync(first.html, 'utf8');
@@ -223,10 +224,9 @@ test('writes Jira text, attachments and a copy button', () => {
   const wiki = readFileSync(first.jiraFile, 'utf8');
   assert.match(wiki, /^\*Severity:\* major/);
   assert.match(wiki, /\*Test technique \(ISTQB\):\* Boundary value analysis/);
-  for (const heading of ['Environment', 'Steps to reproduce', 'Expected result', 'Test design technique (ISTQB)', 'Failed API calls', 'Screenshots']) {
+  for (const heading of ['Environment', 'Steps to reproduce', 'Expected result', 'Actual result', 'Test design technique (ISTQB)', 'Failed API calls', 'Screenshots']) {
     assert.match(wiki, new RegExp(`^h3\\. ${heading.replace(/[()]/g, '\\$&')}$`, 'm'), heading);
   }
-  assert.doesNotMatch(wiki, /Actual result/);
   assert.match(wiki, /^# Open http/m);
   assert.match(wiki, /^\|\|Step\|\|Request\|\|Status\|\|Time\|\|$/m);
   assert.match(wiki, /\{noformat\}\n.*Database timeout/s);

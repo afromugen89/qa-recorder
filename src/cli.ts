@@ -54,7 +54,7 @@ Check options:
   Exits with code 1 when an accessibility violation or layout error is found.
 
 Report options:
-  --title <text>  --expected <text>  --notes <text>
+  --title <text>  --expected <text>  --actual <text>  --notes <text>
   --severity critical|major|minor|trivial  --priority high|medium|low
   --technique bva,ep,dt,st,eg,exploratory,checklist,use-case,random
   --reporter <name>  --from-seq <n>  --to-seq <n>
@@ -310,6 +310,7 @@ function report(argv: string[]): void {
     options: {
       title: { type: 'string' },
       expected: { type: 'string' },
+      actual: { type: 'string' },
       notes: { type: 'string' },
       severity: { type: 'string' },
       priority: { type: 'string' },
@@ -358,6 +359,7 @@ function report(argv: string[]): void {
   const written = writeBugReport(dir, session, {
     title: values.title,
     expected: values.expected,
+    actual: values.actual,
     notes: values.notes,
     severity: values.severity as never,
     priority: values.priority as never,

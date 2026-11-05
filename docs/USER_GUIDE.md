@@ -338,7 +338,7 @@ npx qa-recorder check https://your-app.example.com/checkout --wcag 2.2 --level A
 2. Click **Start bug report**. The form is filled in from your recording:
    - A summary of steps, failed and slow API calls, console errors and JS errors.
    - **ISTQB test technique**, ticked automatically based on the test data you used, with *(detected)* next to it.
-3. Type a **Title** (required), fill in the **Expected result**, choose **Severity** (critical, major, minor, trivial) and **Priority** (high, medium, low), and add **Notes** if you want.
+3. Type a **Title** (required), fill in the **Expected result** and **Actual result**, choose **Severity** (critical, major, minor, trivial) and **Priority** (high, medium, low), and add **Notes** if you want.
 4. Under **Reproduction steps**, untick any step that isn't needed to reproduce the bug, such as a wrong click you corrected. The remaining steps are renumbered in the report. API calls and errors from a left-out step stay in the report, listed under the step before it, so no evidence is lost.
 5. Under **Screenshots**, untick any screenshot you don't want in the report. Click **Preview** to look at one first. *The page as it is when you click Create* is the screenshot of the app taken at that moment. Screenshots of left-out steps are dropped too. **All** and **None** tick or untick the whole list.
 
@@ -383,7 +383,7 @@ A report contains:
 
 - Environment: start URL, browser and user agent, and the device and viewport size if you used `--device` or resized the tab
 - Numbered **steps to reproduce** in plain English, with the test data and technique for each generated value and whether it was expected to be valid or invalid
-- Expected result
+- Expected and actual results, as you typed them
 - The ISTQB technique and why it was chosen
 - Failed API calls with request and response bodies (optional)
 - Slow API calls (optional)
@@ -417,7 +417,7 @@ npx qa-recorder report recordings/2026-11-04_09-15-02 \
 
 | Option | Meaning |
 | --- | --- |
-| `--title`, `--expected`, `--notes` | Report text. If you leave out `--title`, a title is suggested from the most serious failure. |
+| `--title`, `--expected`, `--actual`, `--notes` | Report text. If you leave out `--title`, a title is suggested from the most serious failure. |
 | `--severity` | `critical`, `major`, `minor` or `trivial` |
 | `--priority` | `high`, `medium` or `low` |
 | `--technique` | Comma-separated: `bva`, `ep`, `dt` (decision table), `st` (state transition), `eg` (error guessing), `exploratory`, `checklist`, `use-case`, `random`. Detected automatically if left out. |
