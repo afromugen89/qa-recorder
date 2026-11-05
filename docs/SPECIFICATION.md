@@ -158,11 +158,14 @@ Every value the tool puts on the page is tagged on the recorded action (`testDat
 | BUG-04 | **ISTQB technique:** detect the techniques from the test data used and say why (boundary value analysis, equivalence partitioning, error guessing, random testing, use case testing for the looper, checklist-based testing for accessibility and layout checks, boundary value analysis for breakpoint widths). If no generated data was used, the technique is exploratory testing. The tester can tick or untick any technique, including decision table and state transition testing. | Built |
 | BUG-05 | Capture expected result, severity (critical, major, minor, trivial), priority (high, medium, low), reporter and notes. | Built |
 | BUG-06 | Steps to reproduce in plain English, numbered, with the test data label, technique and expected valid or invalid for each generated value, and the frame or shadow DOM location. | Built |
-| BUG-07 | Include the environment (URL, browser, user agent, viewport or device, seed), failed calls with request and response bodies, slow calls, console and JavaScript errors linked to steps, API response times per endpoint, accessibility and layout results with annotated screenshots, screenshots and the full timeline. | Built |
+| BUG-07 | Include the environment (URL, browser, user agent, viewport or device), failed calls with request and response bodies, slow calls, console and JavaScript errors linked to steps, API response times per endpoint, accessibility and layout results with annotated screenshots, and screenshots. The test data seed, the recording time and the full timeline are not in the report (they stay in `session.json`). | Built |
 | BUG-08 | Warn in the report when API mocks were active and list which calls they changed. | Built |
 | BUG-09 | A later bug in the same session can cover the whole session or only what happened since the previous bug. The CLI accepts `--from-seq` and `--to-seq`. | Built |
-| BUG-10 | Write `report.html` (self-contained, screenshots embedded, printable), `report.md` (for Jira, GitHub or Azure DevOps) and `bug.json` to `recordings/<session>/bugs/<nn>-<title>/`. | Built |
+| BUG-10 | Write `report.html` (self-contained, screenshots embedded, printable), `report.md` (for GitHub or Azure DevOps), `jira.txt`, `attachments/` and `bug.json` to `recordings/<session>/bugs/<nn>-<title>/`. | Built |
 | BUG-12 | Before creating a report, the tester picks which reproduction steps go in (remaining steps are renumbered; API calls and errors from a left-out step stay, under the step before it) and which screenshots go in (step, accessibility and layout screenshots, and the page screenshot taken on Create), with a preview of each. The CLI accepts `--skip-steps` and `--skip-screenshots`. | Built |
+| BUG-13 | Failed API calls, slow API calls and API response times are optional sections. In the Bug tab the tester ticks which sections go in (failed and slow on, response times off by default) and can untick single calls or endpoints. The CLI accepts `--leave-out failed-calls,slow-calls,response-times`. | Built |
+| BUG-14 | **Jira-ready:** each report also writes `jira.txt` (Jira wiki markup) and an `attachments/` folder with the kept screenshots under short names that the text refers to. `report.html` and the Bug tab have **Copy description for Jira** (puts rich text for Jira Cloud and wiki markup for Jira Server and Data Center on the clipboard) and **Copy summary**. | Built |
+| BUG-15 | Screenshots in `report.html` open at their original size when clicked (or Enter); click or Esc closes them. | Built |
 | BUG-11 | Send reports directly to Jira, GitHub Issues or Azure DevOps. | Not built |
 
 ### 4.8 API mocking
@@ -260,7 +263,7 @@ Team files in `.qa-recorder/`: `profiles.json` and `mocks.json`.
 | ID | Requirement | Status |
 | --- | --- | --- |
 | NFR-01 | **Privacy:** passwords and card values are masked by default. | Built |
-| NFR-02 | **Reproducibility:** generated data is seeded, and the seed is in the session and the report. | Built |
+| NFR-02 | **Reproducibility:** generated data is seeded, and the seed is in `session.json` (not in the bug report, by request). | Built |
 | NFR-03 | **Isolation:** the QA tools and layout checks do not change what is recorded; layout checks run in a separate browser. | Built |
 | NFR-04 | **CI use:** headless recording and the `check` command with a non-zero exit code on failures. | Built |
 | NFR-05 | **Trust in reports:** mocked calls are always labelled so no bug is filed against a mock. | Built |

@@ -6,7 +6,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { startRecording, type Recorder } from '../src/index.js';
 import type { SessionData } from '../src/index.js';
-import { describeAction, endpointKey, apiPerformance } from '../src/report/bug.js';
+import { describeAction, endpointKey, apiPerformance, buildBugReport } from '../src/report/bug.js';
+import { jiraCopy } from '../src/report/jira.js';
 import type { WrittenReport } from '../src/report/render.js';
 import { startDemo, type DemoServer } from './fixtures/server.js';
 
@@ -16,6 +17,7 @@ let recorder: Recorder;
 let first: WrittenReport;
 let second: WrittenReport;
 let session: SessionData;
+let secondCreated: { jira: { summary: string; wiki: string; html: string }; attachments: string[]; attachmentsDir: string };
 
 before(async () => {
   demo = await startDemo();
@@ -59,7 +61,8 @@ before(async () => {
     markdown: join(secondDir, 'report.md'),
     json: join(secondDir, 'bug.json'),
     report: JSON.parse(readFileSync(join(secondDir, 'bug.json'), 'utf8')),
-  };
+  } as WrittenReport;
+  secondCreated = created.result;
   session = await recorder.stop();
 });
 
@@ -165,4 +168,125 @@ test('describes actions and groups endpoints', () => {
     { ...base, type: 'network', method: 'GET', url: 'https://x.test/a/2', resourceType: 'fetch', durationMs: 300, isError: true, isSlow: false },
   ] as never);
   assert.deepEqual(stats[0], { endpoint: 'GET x.test/a/:id', calls: 2, errors: 1, avgMs: 200, p95Ms: 300, maxMs: 300 });
+});
+
+test('API sections can be left out, and single calls or endpoints dropped', () => {
+  const toSeq = session.events.find((e) => e.type === 'bug')!.seq;
+  const full = buildBugReport(session, { toSeq });
+  assert.equal(full.failedApiCalls.length, 1);
+  assert.equal(full.slowApiCalls.length, 1);
+  assert.ok(full.apiPerformance.length >= 3);
+  assert.ok(full.failedApiCalls.every((c) => /^\d+$/.test(c.key)));
+
+  const none = buildBugReport(session, { toSeq, sections: { failedApiCalls: false, slowApiCalls: false, apiResponseTimes: false } });
+  assert.deepEqual([none.failedApiCalls.length, none.slowApiCalls.length, none.apiPerformance.length], [0, 0, 0]);
+  const { wiki, html } = jiraCopy(none);
+  for (const heading of ['Failed API calls', 'Slow API calls', 'API response times']) {
+    assert.ok(!wiki.includes(heading), heading);
+    assert.ok(!html.includes(heading), heading);
+  }
+
+  const dropEndpoint = full.apiPerformance[0].endpoint;
+  const some = buildBugReport(session, { toSeq, excludeApiCalls: [full.slowApiCalls[0].key], excludeEndpoints: [dropEndpoint] });
+  assert.equal(some.failedApiCalls.length, 1);
+  assert.equal(some.slowApiCalls.length, 0);
+  assert.equal(some.apiPerformance.length, full.apiPerformance.length - 1);
+  assert.ok(!some.apiPerformance.some((p) => p.endpoint === dropEndpoint));
+});
+
+test('the panel draft lists API calls and endpoints for picking', async () => {
+  // Built the same way the panel's bugDraft command builds it.
+  const { bugDraft } = await import('../src/report/bug.js');
+  const d = bugDraft({ ...session, events: session.events.filter((e) => e.seq < session.events.find((x) => x.type === 'bug')!.seq) });
+  assert.equal(d.apiLists.failedApiCalls.length, 1);
+  assert.match(d.apiLists.failedApiCalls[0].label, /GET \/api\/fail → 500/);
+  assert.equal(d.apiLists.slowApiCalls.length, 1);
+  assert.ok(d.apiLists.apiResponseTimes.some((e) => e.key.endsWith('/api/slow')));
+});
+
+test('reports have no timeline, test data seed or recording time', () => {
+  const html = readFileSync(first.html, 'utf8');
+  const md = readFileSync(first.markdown, 'utf8');
+  const json = JSON.parse(readFileSync(first.json, 'utf8'));
+  for (const text of [html, md, first.jira.wiki]) {
+    assert.ok(!/Full timeline|Test data seed|Recorded/.test(text), 'removed fields are gone');
+  }
+  assert.equal(json.timeline, undefined);
+  assert.equal(json.environment.dataSeed, undefined);
+  assert.equal(json.environment.recordedAt, undefined);
+});
+
+test('writes Jira text, attachments and a copy button', () => {
+  const wiki = readFileSync(first.jiraFile, 'utf8');
+  assert.match(wiki, /^\*Severity:\* major/);
+  assert.match(wiki, /\*Test technique \(ISTQB\):\* Boundary value analysis/);
+  for (const heading of ['Environment', 'Steps to reproduce', 'Expected result', 'Actual result', 'Test design technique (ISTQB)', 'Failed API calls', 'Screenshots']) {
+    assert.match(wiki, new RegExp(`^h3\\. ${heading.replace(/[()]/g, '\\$&')}$`, 'm'), heading);
+  }
+  assert.match(wiki, /^# Open http/m);
+  assert.match(wiki, /^\|\|Step\|\|Request\|\|Status\|\|Time\|\|$/m);
+  assert.match(wiki, /\{noformat\}\n.*Database timeout/s);
+  assert.match(wiki, /^!bug-screenshot\.png\|thumbnail!$/m);
+  // Every screenshot named in the text is in the attachments folder.
+  const files = readdirSync(first.attachmentsDir);
+  for (const a of first.jira.attachments) {
+    assert.ok(files.includes(a.name), a.name);
+    assert.ok(wiki.includes(`!${a.name}|thumbnail!`), a.name);
+  }
+  assert.ok(first.jira.attachments.some((a) => /^step-\d{2}\.png$/.test(a.name)));
+  assert.match(first.jira.html, /<h3>Steps to reproduce<\/h3>\s*<ol><li>/);
+
+  const html = readFileSync(first.html, 'utf8');
+  assert.match(html, /id="copy-jira"/);
+  assert.match(html, /<template id="jira-html"><p><strong>Severity:<\/strong>/);
+  assert.ok(html.includes('&#39;') || !html.includes("'</textarea>"));
+
+  // The panel gets the same text back to copy.
+  assert.equal(secondCreated.jira.summary, second.report.title);
+  assert.match(secondCreated.jira.wiki, /h3\. Steps to reproduce/);
+});
+
+test('Jira text escapes markup characters but keeps URLs', () => {
+  const r = buildBugReport(session, { toSeq: session.events.find((e) => e.type === 'bug')!.seq, title: 't', notes: 'Use {code} and [link] | pipe *bold* at https://x.test/a_b?c=[1]' });
+  const { wiki } = jiraCopy(r);
+  assert.ok(wiki.includes('Use \\{code\\} and \\[link\\] \\| pipe \\*bold\\* at https://x.test/a_b?c=[1]'), wiki.split('h3. Notes')[1]);
+});
+
+test('screenshots in the HTML report open at full size', async () => {
+  const { chromium } = await import('playwright');
+  const browser = await chromium.launch();
+  try {
+    const page = await browser.newPage({ viewport: { width: 800, height: 600 } });
+    await page.goto(`file://${first.html}`);
+    const shot = page.locator('figure img.zoom').first();
+    const shown = await shot.evaluate((img: HTMLImageElement) => ({ shown: img.clientWidth, natural: img.naturalWidth }));
+    assert.ok(shown.shown < shown.natural, 'thumbnail is scaled down');
+    assert.equal(await page.locator('#lightbox').isVisible(), false);
+    await shot.click();
+    const big = page.locator('#lightbox img');
+    await big.waitFor();
+    const size = await big.evaluate((img: HTMLImageElement) => ({ shown: img.clientWidth, natural: img.naturalWidth }));
+    assert.equal(size.shown, size.natural, 'opens at original size');
+    await page.keyboard.press('Escape');
+    assert.equal(await page.locator('#lightbox').isVisible(), false);
+
+    // The copy button puts wiki markup and rich text on the clipboard.
+    const copied = await page.evaluate(() => {
+      const got: Record<string, string> = {};
+      document.addEventListener('copy', (e) => {
+        setTimeout(() => {
+          got.text = e.clipboardData!.getData('text/plain');
+          got.html = e.clipboardData!.getData('text/html');
+        });
+      });
+      const realSet = DataTransfer.prototype.setData;
+      DataTransfer.prototype.setData = function (type: string, value: string) { got[type] = value; return realSet.call(this, type, value); };
+      (document.getElementById('copy-jira') as HTMLButtonElement).click();
+      return { plain: got['text/plain'], html: got['text/html'], status: document.getElementById('copy-status')!.textContent };
+    });
+    assert.match(copied.plain, /h3\. Steps to reproduce/);
+    assert.match(copied.html, /<h3>Steps to reproduce<\/h3>/);
+  } finally {
+    await browser.close();
+  }
 });

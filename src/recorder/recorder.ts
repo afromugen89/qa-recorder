@@ -411,7 +411,15 @@ export class Recorder {
       }
       const input = (command.bug ?? {}) as BugInput & { scope?: 'session' | 'since-last-bug'; pageScreenshot?: boolean };
       const written = await this.createBug({ ...input, page });
-      return { ok: true, result: { title: written.report.title, dir: written.dir, html: written.html, markdown: written.markdown } };
+      return {
+        ok: true,
+        result: {
+          title: written.report.title, dir: written.dir, html: written.html, markdown: written.markdown,
+          jira: { summary: written.jira.summary, wiki: written.jira.wiki, html: written.jira.html },
+          attachmentsDir: written.attachmentsDir,
+          attachments: written.jira.attachments.map((a) => a.name),
+        },
+      };
     } catch (error) {
       return { ok: false, error: (error as Error).message };
     }

@@ -10,7 +10,7 @@ import {
 import { ISTQB_TECHNIQUES, techniqueName, type TechniqueId } from './data/techniques.js';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildBugReport } from './report/bug.js';
+import { buildBugReport, type ApiSection } from './report/bug.js';
 import { writeBugReport } from './report/render.js';
 import { devices } from 'playwright';
 import { a11ySummary, type WcagLevel, type WcagVersion } from './audit/a11y.js';
@@ -60,6 +60,7 @@ Report options:
   --reporter <name>  --from-seq <n>  --to-seq <n>
   --skip-steps <n,n>        Leave these step numbers out (remaining steps are renumbered)
   --skip-screenshots <p,p>  Leave these screenshots out, e.g. screenshots/0004-click.png
+  --leave-out <sections>    Leave out API sections: failed-calls, slow-calls, response-times
 
 Data commands:
   data types                               List Faker data types
@@ -319,6 +320,7 @@ function report(argv: string[]): void {
       'to-seq': { type: 'string' },
       'skip-steps': { type: 'string' },
       'skip-screenshots': { type: 'string' },
+      'leave-out': { type: 'string' },
     },
   });
   const dir = positionals[0];
@@ -345,6 +347,15 @@ function report(argv: string[]): void {
     return step.key;
   });
   const excludeScreenshots = values['skip-screenshots']?.split(',').map((t) => t.trim().replace(/\\/g, '/'));
+  const SECTION_FLAGS: Record<string, ApiSection> = {
+    'failed-calls': 'failedApiCalls', 'slow-calls': 'slowApiCalls', 'response-times': 'apiResponseTimes',
+  };
+  const sections: Partial<Record<ApiSection, boolean>> = {};
+  for (const t of values['leave-out']?.split(',') ?? []) {
+    const id = SECTION_FLAGS[t.trim()];
+    if (!id) throw new Error(`--leave-out: unknown section "${t.trim()}". Use: ${Object.keys(SECTION_FLAGS).join(', ')}`);
+    sections[id] = false;
+  }
   const written = writeBugReport(dir, session, {
     title: values.title,
     expected: values.expected,
@@ -358,6 +369,7 @@ function report(argv: string[]): void {
     toSeq,
     excludeSteps,
     excludeScreenshots,
+    sections,
   });
   const r = written.report;
   console.log(`${green('Bug report:')} ${r.title}`);
@@ -365,7 +377,9 @@ function report(argv: string[]): void {
     `${r.consoleErrors.length} console messages, ${r.pageErrors.length} JS errors`);
   console.log(`  Technique: ${r.techniques.map((t) => t.name).join(', ')}`);
   console.log(`  ${relative(process.cwd(), written.html)}`);
-  console.log(`  ${relative(process.cwd(), written.markdown)}  (paste into Jira)`);
+  console.log(`  ${relative(process.cwd(), written.jiraFile)}  (Jira description; the HTML report has a copy button)`);
+  if (written.jira.attachments.length) console.log(`  ${relative(process.cwd(), written.attachmentsDir)}  (screenshots to attach in Jira)`);
+  console.log(`  ${relative(process.cwd(), written.markdown)}`);
 }
 
 function listDevices(): void {

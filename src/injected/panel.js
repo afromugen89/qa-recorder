@@ -24,6 +24,9 @@
     bugForm: {
       scope: 'session', severity: 'major', priority: 'medium', title: '', expected: '', actual: '', notes: '', techniques: [],
       excludeSteps: [], excludeScreenshots: [], pageScreenshot: true,
+      // Optional API sections. Response times are off unless the QA wants them.
+      sections: { failedApiCalls: true, slowApiCalls: true, apiResponseTimes: false },
+      excludeApiCalls: [], excludeEndpoints: [],
     },
     bugPreview: {},
     lastBug: null,
@@ -152,6 +155,9 @@
     .pick label.off { color: #9ca3af; text-decoration: line-through; }
     .pick .shot { display: flex; gap: 6px; align-items: flex-start; border-top: 1px solid #f3f4f6; }
     .pick .shot label { flex: 1; min-width: 0; }
+    .pick.api label { word-break: break-all; }
+    .sec { display: flex; gap: 6px; align-items: center; font-size: 12px; margin: 4px 0 2px; }
+    .lastbug { margin-top: 10px; padding: 8px; border: 1px solid #e5e7eb; border-radius: 6px; }
     .pick img { display: block; max-width: 100%; margin: 2px 0 6px; border: 1px solid #e5e7eb; border-radius: 4px; }
     button.link { border: 0; background: none; color: #4f46e5; cursor: pointer; font-size: 12px; padding: 3px 0; white-space: nowrap; }
     h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: #6b7280; }
@@ -836,12 +842,80 @@
         })));
   }
 
+  function bugApiView() {
+    const f = state.bugForm;
+    const lists = state.bug.apiLists || {};
+    const groups = [
+      ['failedApiCalls', 'Failed API calls', 'excludeApiCalls'],
+      ['slowApiCalls', 'Slow API calls', 'excludeApiCalls'],
+      ['apiResponseTimes', 'API response times', 'excludeEndpoints'],
+    ];
+    return h('div', null,
+      h('h4', null, 'API details in the report'),
+      h('div', { class: 'muted' }, 'Tick the sections to include, then untick single calls or endpoints you do not need.'),
+      groups.map(([id, label, field]) => {
+        const items = lists[id] || [];
+        const on = Boolean(f.sections[id]) && items.length > 0;
+        const kept = items.filter((i) => !f[field].includes(i.key)).length;
+        return h('div', null,
+          h('label', { class: 'sec' },
+            h('input', {
+              type: 'checkbox', checked: on, disabled: !items.length, 'aria-label': `Include ${label}`,
+              onchange: (e) => { f.sections = { ...f.sections, [id]: e.target.checked }; render(); },
+            }),
+            h('span', null, items.length ? `${label} (${on ? kept : 0} of ${items.length})` : `${label} (none recorded)`)),
+          on ? h('div', { class: 'pick api', 'data-pick': id }, items.map((i) => {
+            const keep = !f[field].includes(i.key);
+            return h('label', { class: keep ? '' : 'off' },
+              h('input', {
+                type: 'checkbox', checked: keep, 'aria-label': `Include ${i.label}`,
+                onchange: (e) => { f[field] = toggleIn(f[field], i.key, e.target.checked); render(); },
+              }),
+              h('span', null, i.label));
+          })) : null);
+      }));
+  }
+
+  // Puts text and, when given, rich text on the clipboard. The tools page is
+  // not a secure context, so this uses the copy event instead of the async API.
+  function copyToClipboard(text, html) {
+    const onCopy = (e) => {
+      e.clipboardData.setData('text/plain', text);
+      if (html) e.clipboardData.setData('text/html', html);
+      e.preventDefault();
+    };
+    document.addEventListener('copy', onCopy);
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch { ok = false; }
+    document.removeEventListener('copy', onCopy);
+    return ok;
+  }
+
+  function lastBugView() {
+    const b = state.lastBug;
+    if (!b || !b.jira) return null;
+    const copy = (text, html, what) => {
+      if (copyToClipboard(text, html)) flash(`${what} copied. Paste it into the Jira ticket.`, 'ok');
+      else flash('Could not copy. Open the HTML report and use its copy button.', 'error');
+    };
+    return h('div', { class: 'lastbug' },
+      h('h4', { style: 'margin-top:0' }, 'Last bug report'),
+      h('div', null, b.title),
+      h('div', { class: 'actions' },
+        h('button', { class: 'b p', onclick: () => copy(b.jira.wiki, b.jira.html, 'Description') }, 'Copy description for Jira'),
+        h('button', { class: 'b', onclick: () => copy(b.jira.summary, '', 'Summary') }, 'Copy summary')),
+      b.attachments && b.attachments.length
+        ? h('div', { class: 'muted' }, `Attach ${b.attachments.length} screenshot${b.attachments.length > 1 ? 's' : ''} from ${b.attachmentsDir}`)
+        : null);
+  }
+
   function bugView() {
     if (!state.bug) {
       return h('div', null,
         h('div', { class: 'muted' }, 'Builds a bug report from what you have recorded: steps, failed and slow API calls, console errors, screenshots and the ISTQB technique used.'),
         h('div', { class: 'actions' },
-          h('button', { class: 'b p', disabled: state.busy, onclick: () => run(loadBugDraft) }, 'Start bug report')));
+          h('button', { class: 'b p', disabled: state.busy, onclick: () => run(loadBugDraft) }, 'Start bug report')),
+        lastBugView());
     }
     const f = state.bugForm;
     const d = state.bug;
@@ -872,6 +946,7 @@
             ['high', 'medium', 'low'].map((v) => h('option', { value: v, selected: f.priority === v }, v))))),
       bugStepsView(),
       bugShotsView(),
+      bugApiView(),
       h('h4', null, 'ISTQB test technique'),
       h('div', null, state.init.techniques.map((t) => h('label', { style: 'display:block;font-size:12px;margin:2px 0' },
         h('input', {
@@ -890,7 +965,7 @@
             state.bug = null;
             state.bugForm = {
               ...state.bugForm, title: '', expected: '', actual: '', notes: '', scope: 'since-last-bug',
-              excludeSteps: [], excludeScreenshots: [], pageScreenshot: true,
+              excludeSteps: [], excludeScreenshots: [], pageScreenshot: true, excludeApiCalls: [], excludeEndpoints: [],
             };
             state.bugPreview = {};
             flash(`Saved "${r.title}" to ${r.html}`, 'ok');

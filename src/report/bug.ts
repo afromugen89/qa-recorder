@@ -33,7 +33,20 @@ export interface BugInput {
   excludeSteps?: string[];
   /** Screenshots to leave out, by path relative to the session folder. */
   excludeScreenshots?: string[];
+  /**
+   * Optional API sections. Each one is included unless set to false:
+   * failed calls, slow calls and the response times table.
+   */
+  sections?: Partial<Record<ApiSection, boolean>>;
+  /** Failed or slow API calls to leave out, by `ReportApiCall.key`. */
+  excludeApiCalls?: string[];
+  /** Endpoints to leave out of the response times table, by `EndpointStats.endpoint`. */
+  excludeEndpoints?: string[];
 }
+
+/** The API sections a QA can switch on or off. */
+export type ApiSection = 'failedApiCalls' | 'slowApiCalls' | 'apiResponseTimes';
+export const API_SECTIONS: ApiSection[] = ['failedApiCalls', 'slowApiCalls', 'apiResponseTimes'];
 
 export interface ReportStep {
   number: number;
@@ -51,6 +64,8 @@ export interface ReportStep {
 }
 
 export interface ReportApiCall {
+  /** Stable id for picking calls: the recorded event's seq. */
+  key: string;
   step?: number;
   method: string;
   url: string;
@@ -107,8 +122,6 @@ export interface BugReport {
     url?: string;
     browser: string;
     userAgent?: string;
-    recordedAt: string;
-    dataSeed?: number;
     /** Playwright device the session was recorded as. */
     device?: string;
     /** Tab size: the recording's starting size, or the last size the QA resized it to. */
@@ -131,8 +144,6 @@ export interface BugReport {
   /** Responsive layout checks in this report's range. */
   layout: ReportLayoutCheck[];
   screenshot?: string;
-  /** Every event in range, for the full timeline appendix. */
-  timeline: TimelineEvent[];
 }
 
 const quote = (text: string, max = 60) => {
@@ -507,6 +518,7 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
 
   const network = events.filter((e): e is NetworkEvent => e.type === 'network');
   const toCall = (c: NetworkEvent): ReportApiCall => ({
+    key: String(c.seq),
     step: stepAt(c, events, stepOfSeq),
     method: c.method,
     url: c.url,
@@ -518,8 +530,14 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     responseBody: c.responseBody,
     ...(c.mock && { mock: c.mock.rule }),
   });
-  const failedApiCalls = network.filter((c) => c.isError).map(toCall);
-  const slowApiCalls = network.filter((c) => c.isSlow && !c.isError).map(toCall);
+  const on = (section: ApiSection) => input.sections?.[section] !== false;
+  const skipCalls = new Set(input.excludeApiCalls ?? []);
+  const skipEndpoints = new Set(input.excludeEndpoints ?? []);
+  const pickCalls = (section: ApiSection, list: NetworkEvent[]) =>
+    on(section) ? list.map(toCall).filter((c) => !skipCalls.has(c.key)) : [];
+  const failedApiCalls = pickCalls('failedApiCalls', network.filter((c) => c.isError));
+  const slowApiCalls = pickCalls('slowApiCalls', network.filter((c) => c.isSlow && !c.isError));
+  const responseTimes = on('apiResponseTimes') ? apiPerformance(network).filter((p) => !skipEndpoints.has(p.endpoint)) : [];
   const consoleEvents = events.filter((e): e is ConsoleEvent => e.type === 'console');
   const pageErrorEvents = events.filter((e): e is PageErrorEvent => e.type === 'pageerror');
   const consoleErrors = consoleEvents.map((e) => ({ step: stepAt(e, events, stepOfSeq), level: e.level, text: e.text, location: e.location }));
@@ -574,8 +592,6 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
       url: startUrl,
       browser: session.meta.browser,
       userAgent: session.meta.userAgent,
-      recordedAt: session.meta.startedAt,
-      dataSeed: session.meta.dataSeed,
       ...(session.meta.device && { device: session.meta.device }),
       ...(viewport && { viewport }),
     },
@@ -587,13 +603,12 @@ export function buildBugReport(session: SessionData, input: BugInput = {}): BugR
     slowApiCalls,
     consoleErrors,
     pageErrors,
-    apiPerformance: apiPerformance(network),
+    apiPerformance: responseTimes,
     slowThresholdMs: session.meta.slowThresholdMs,
     mocks: summarizeMocks(network),
     accessibility,
     layout,
     screenshot: keepShot(input.screenshot),
-    timeline: events,
   };
 }
 
@@ -645,10 +660,24 @@ export function bugDraft(session: SessionData, fromSeq = 0) {
     screenshots: reportScreenshots(report),
     failedApiCalls: report.failedApiCalls.length,
     slowApiCalls: report.slowApiCalls.length,
+    /** For the API pickers. */
+    apiLists: {
+      failedApiCalls: report.failedApiCalls.map((c) => ({ key: c.key, label: callLabel(c) })),
+      slowApiCalls: report.slowApiCalls.map((c) => ({ key: c.key, label: callLabel(c) })),
+      apiResponseTimes: report.apiPerformance.map((p) => ({
+        key: p.endpoint,
+        label: `${p.endpoint} · ${p.calls} call${p.calls > 1 ? 's' : ''}, avg ${p.avgMs} ms, max ${p.maxMs} ms${p.errors ? `, ${p.errors} failed` : ''}`,
+      })),
+    },
     consoleErrors: report.consoleErrors.filter((e) => e.level === 'error').length,
     pageErrors: report.pageErrors.length,
     mockedCalls: report.mocks.reduce((sum, m) => sum + m.calls, 0),
     a11yViolations: report.accessibility.reduce((sum, s) => sum + s.violations.length, 0),
     layoutIssues: report.layout.reduce((sum, c) => sum + c.viewports.reduce((n, v) => n + v.issues.length, 0), 0),
   };
+}
+
+function callLabel(c: ReportApiCall): string {
+  const status = c.failure ? `failed (${c.failure})` : `${c.status ?? '?'}`;
+  return `${c.step ? `Step ${c.step} · ` : ''}${c.method} ${shortUrl(c.url)} → ${status} · ${c.durationMs ?? '?'} ms`;
 }
