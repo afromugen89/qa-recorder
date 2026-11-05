@@ -163,6 +163,7 @@
   function mount() {
     if (root || !document.body) return;
     root = h('div', { id: 'qa-tools' });
+    root.addEventListener('focusout', flushPending);
     document.body.append(root);
     render();
     call('appInfo').then((app) => { state.app = app; render(); }).catch(() => undefined);
@@ -910,13 +911,38 @@
       h('button', { class: 'b auto', title: 'Switch to the app (Alt+Shift+D)', disabled: !a, onclick: showApp }, 'Go to app'));
   }
 
+  // Updates pushed from Node (API calls, tab switches, loop progress) arrive
+  // while the QA may be using a control. Redrawing replaces every element,
+  // which closes an open dropdown and drops focus, so wait until the QA
+  // leaves the control. The QA's own clicks still redraw at once.
+  let pending = false;
+  function busyControl() {
+    const el = document.activeElement;
+    return Boolean(root && el && root.contains(el) && /^(SELECT|INPUT|TEXTAREA)$/.test(el.tagName));
+  }
+  function refresh() {
+    if (busyControl()) pending = true;
+    else render();
+  }
+  function flushPending() {
+    // focusout fires before focus moves on; check where it went.
+    setTimeout(() => { if (pending && !busyControl()) render(); }, 0);
+  }
+
+  // The title shows how many mocks are on; it needs no redraw.
+  function setTitle() {
+    const mocksOn = state.mocks.active;
+    document.title = `QA tools${mocksOn ? ` · ${mocksOn} mock${mocksOn > 1 ? 's' : ''} on` : ''}`;
+  }
+
   function render() {
     if (!root) return;
+    pending = false;
     // Keep scroll positions when redrawing (e.g. ticking a box in a long list).
     const scrolls = [...root.querySelectorAll('.body, [data-pick]')].map((el) => [el.dataset.pick || 'body', el.scrollTop]);
     root.replaceChildren(h('style', null, CSS));
     const mocksOn = state.mocks.active;
-    document.title = `QA tools${mocksOn ? ` · ${mocksOn} mock${mocksOn > 1 ? 's' : ''} on` : ''}`;
+    setTitle();
     const tabs = [['faker', 'Faker'], ['bva', 'Boundaries'], ['edge', 'Edge cases'], ['profiles', 'Profiles'], ['loop', 'Looper'], ['mock', 'Mock'], ['a11y', 'Accessibility'], ['rwd', 'Responsive'], ['bug', 'Bug']];
     let body;
     if (!state.init) body = h('div', { class: 'muted' }, 'Loading…');
@@ -950,22 +976,32 @@
   window.__qaPanelUi = {
     setTarget(target) {
       state.target = target;
-      render();
+      refresh();
     },
     appChanged(app) {
       // Each tab has its own focused field.
-      if (!app || (state.target && state.target.pageId !== app.pageId)) state.target = null;
+      const dropTarget = Boolean(state.target && (!app || state.target.pageId !== app.pageId));
+      if (dropTarget) state.target = null;
+      else if (JSON.stringify(app) === JSON.stringify(state.app)) return;
       state.app = app;
-      render();
+      refresh();
     },
     mocksChanged(mocks) {
+      const before = state.mocks;
       state.mocks = mocks;
+      setTitle();
+      // Every API call the app makes lands here (for "Recent API calls").
+      // Only the Mock tab shows that list; elsewhere just the "mocks on"
+      // banner matters, so leave the page alone unless it changed.
+      const shown = state.tab === 'mock' ? mocks : { active: mocks.active };
+      const shownBefore = state.tab === 'mock' ? before : { active: before.active };
+      if (JSON.stringify(shown) === JSON.stringify(shownBefore)) return;
       // Don't redraw under the QA while they edit a rule.
-      if (!state.mockEdit) render();
+      if (!state.mockEdit) refresh();
     },
     loopStatus(status) {
       state.loopStatus = status;
-      render();
+      refresh();
     },
     /** Switch to a tab of the QA tools, e.g. open('a11y'). */
     open(tab) {
