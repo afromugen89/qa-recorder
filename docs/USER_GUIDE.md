@@ -25,6 +25,23 @@ This guide is for testers using the app. For how it works inside, see the [READM
 
 ## 1. Install
 
+### Windows: the ready-to-run zip (easiest)
+
+You don't need Node.js, npm or Git. Ask whoever shares QA Recorder with you for the zip (`QA-Recorder-<version>-win-x64.zip`), or download it from the repository's **Releases** page.
+
+1. Right-click the zip, choose **Properties**, tick **Unblock** if it is there, and click **OK**. This stops Windows asking about every file.
+2. Extract the zip anywhere, for example your Desktop.
+3. Open the folder and double-click **QA Recorder.cmd**.
+4. Type the address of the site to test and press Enter. Leave it empty to start on a blank page.
+
+The black window shows what is being recorded. Close the browser when you are done and the recordings folder opens.
+
+Recordings, bug reports, data profiles and API mocks are saved in `%USERPROFILE%\QA Recorder` (for example `C:\Users\you\QA Recorder`), not in the extracted folder. To update, delete the old folder and extract the new zip; your recordings stay where they are.
+
+For command-line options, use `qa-recorder.cmd` from that folder in place of `npx qa-recorder`, for example `qa-recorder.cmd record https://example.com --slow 500`.
+
+### From source (developers)
+
 You need [Node.js](https://nodejs.org) 20 or newer and Git.
 
 ```bash

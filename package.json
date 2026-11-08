@@ -16,7 +16,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "record": "tsx src/cli.ts record",
     "test": "node --import tsx --test --test-concurrency=1 test/*.test.ts",
-    "setup": "playwright install chromium"
+    "setup": "playwright install chromium",
+    "package": "node scripts/package.mjs"
   },
   "dependencies": {
     "@faker-js/faker": "^10.6.0",

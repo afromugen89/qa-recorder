@@ -11,6 +11,12 @@ Each API call is linked to the user action that triggered it, so a report can sa
 
 New to QA Recorder? Read the **[user guide](docs/USER_GUIDE.md)** for a step-by-step walkthrough. The **[specification](docs/SPECIFICATION.md)** lists every requirement and whether it is built.
 
+## Sharing with other QA users
+
+`npm run package` builds a portable folder and zip under `release/` with Node.js and Chromium inside, so the people you share it with don't need Node, npm or Git. Run it on Windows to get the Windows zip (`QA-Recorder-<version>-win-x64.zip`, a few hundred MB). Recipients extract it and double-click **QA Recorder.cmd**. Their recordings are saved in `%USERPROFILE%\QA Recorder`, so they survive updates.
+
+You can also build it on GitHub: the **Package for Windows** workflow runs from the Actions tab (the zip is a build artifact), and pushing a tag like `v0.2.0` publishes the zip as a release.
+
 ## Setup
 
 ```bash
@@ -213,6 +219,7 @@ qa-recorder launches Chromium through Playwright and injects a small recorder sc
 npm test          # runs the recorder against a demo app in headless Chromium
 npm run typecheck
 npm run build
+npm run package   # portable zip for sharing (see above)
 ```
 
 ## Roadmap
