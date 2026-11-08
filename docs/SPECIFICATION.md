@@ -57,6 +57,7 @@ Primary users are QA testers. A secondary user is the automation engineer who ru
 | Playwright test script export | Not built | |
 | Response-time assertions in generated tests | Not built | |
 | In-browser Start / Stop / Export controls | Partly built | |
+| Portable Windows zip (Node.js and Chromium included) | Built | PR #13 |
 | Branded desktop app (Electron shell) and installer | Not built | |
 
 ## 3. Architecture
@@ -240,7 +241,7 @@ The data needed for this is already recorded: every action in `session.json` has
 | --- | --- | --- |
 | PKG-01 | Launch with one command (`npm run record -- <url>` or `npx qa-recorder record <url>`). | Built |
 | PKG-02 | In-browser controls. Bug reports are started from the Bug tab; Start, Stop and Export buttons are not built (recording starts when the window opens and stops when it closes). | Partly built |
-| PKG-03 | Publish to npm or ship an installer. | Not built |
+| PKG-03 | Ship to QA users who don't have Node.js: `npm run package` builds a portable folder and zip with Node.js and Chromium inside, a double-click launcher (`QA Recorder.cmd`) that asks for the URL, and `qa-recorder.cmd` for the full CLI. User data goes to `%USERPROFILE%\QA Recorder` so it survives updates. A GitHub Actions workflow builds the Windows zip and publishes it as a release on `v*` tags. A Windows installer (.exe/.msi) and npm publishing are not built. | Partly built |
 | PKG-04 | Branded desktop app (Electron shell). | Not built |
 
 ## 5. Output format
@@ -289,3 +290,4 @@ Team files in `.qa-recorder/`: `profiles.json` and `mocks.json`.
 | 2026-11-04 | #6 | Accessibility and responsive checks, `--device`, `check` command |
 | 2026-11-04 | | This specification |
 | 2026-11-05 | | QA tools move out of the page into their own window |
+| 2026-11-08 | #13 | Portable Windows zip for sharing (`npm run package`, release workflow) |

@@ -4,3 +4,4 @@ recordings/
 test-results/
 *.log
 .DS_Store
+release/
