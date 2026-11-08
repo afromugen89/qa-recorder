@@ -4,8 +4,13 @@
 //
 //   npm run package
 //
-// Output: release/QA-Recorder-<version>-<platform>-<arch>/ and a .zip
+// Output: release/QA-Recorder/ and QA-Recorder-<version>-<platform>-<arch>.zip
 // (Windows) or .tar.gz (macOS/Linux) of it.
+//
+// Paths are kept short on purpose: Windows Explorer can't extract a file whose
+// full path is over 260 characters, and Chromium has deep file paths. So the
+// folder inside the zip is just "QA-Recorder" and Chromium sits in browsers/
+// rather than deep inside node_modules.
 //
 // Layout of the package:
 //   QA Recorder.cmd      double-click launcher (asks for a URL)
@@ -13,10 +18,10 @@
 //   README.txt
 //   runtime/node(.exe)   the Node.js that ran this script
 //   app/dist             compiled recorder
-//   app/node_modules     production dependencies, with Chromium inside
-//                        playwright-core/.local-browsers
+//   app/node_modules     production dependencies
+//   browsers/            Chromium (launchers set PLAYWRIGHT_BROWSERS_PATH)
 import { execFileSync } from 'node:child_process';
-import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -24,8 +29,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'));
 const isWin = process.platform === 'win32';
 const name = `QA-Recorder-${pkg.version}-${isWin ? 'win' : process.platform}-${process.arch}`;
+const folder = 'QA-Recorder';
 const releaseDir = join(root, 'release');
-const out = join(releaseDir, name);
+const out = join(releaseDir, folder);
 const app = join(out, 'app');
 const skipArchive = process.argv.includes('--no-archive');
 
@@ -36,8 +42,8 @@ function run(cmd, args, options = {}) {
 
 console.log(`Packaging ${name}`);
 rmSync(out, { recursive: true, force: true });
-rmSync(`${out}.zip`, { force: true });
-rmSync(`${out}.tar.gz`, { force: true });
+rmSync(join(releaseDir, `${name}.zip`), { force: true });
+rmSync(join(releaseDir, `${name}.tar.gz`), { force: true });
 mkdirSync(app, { recursive: true });
 
 // 1. Compile.
@@ -50,11 +56,13 @@ writeFileSync(join(app, 'package.json'), JSON.stringify(appPkg, null, 2));
 cpSync(join(root, 'package-lock.json'), join(app, 'package-lock.json'));
 run('npm', ['ci', '--omit=dev', '--no-audit', '--no-fund', '--ignore-scripts'], { cwd: app });
 
-// 3. Chromium, stored inside node_modules so the folder is self-contained.
-//    The launchers set PLAYWRIGHT_BROWSERS_PATH=0 so Playwright looks there.
-run(process.execPath, [join(app, 'node_modules', 'playwright', 'cli.js'), 'install', 'chromium'], {
+// 3. Chromium, in browsers/ next to the launchers. For offline builds, set
+//    QA_PKG_BROWSERS_FROM to an existing Playwright browsers folder to copy.
+if (process.env.QA_PKG_BROWSERS_FROM) {
+  cpSync(process.env.QA_PKG_BROWSERS_FROM, join(out, 'browsers'), { recursive: true });
+} else run(process.execPath, [join(app, 'node_modules', 'playwright', 'cli.js'), 'install', 'chromium'], {
   cwd: app,
-  env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: '0' },
+  env: { ...process.env, PLAYWRIGHT_BROWSERS_PATH: join(out, 'browsers') },
 });
 
 // 4. The Node.js runtime: the one running this script.
@@ -100,7 +108,7 @@ if (isWin) {
     '@echo off',
     'setlocal',
     'set "QA_DIR=%~dp0"',
-    'set "PLAYWRIGHT_BROWSERS_PATH=0"',
+    'set "PLAYWRIGHT_BROWSERS_PATH=%QA_DIR%browsers"',
     'if not defined QA_RECORDER_HOME set "QA_RECORDER_HOME=%USERPROFILE%\\QA Recorder"',
     'if not exist "%QA_RECORDER_HOME%" mkdir "%QA_RECORDER_HOME%"',
     'cd /d "%QA_RECORDER_HOME%"',
@@ -126,7 +134,7 @@ if (isWin) {
 } else {
   const sh = `#!/bin/sh
 QA_DIR="$(cd "$(dirname "$0")" && pwd)"
-export PLAYWRIGHT_BROWSERS_PATH=0
+export PLAYWRIGHT_BROWSERS_PATH="$QA_DIR/browsers"
 : "\${QA_RECORDER_HOME:=$HOME/QA Recorder}"
 mkdir -p "$QA_RECORDER_HOME" && cd "$QA_RECORDER_HOME" || exit 1
 exec "$QA_DIR/runtime/node" "$QA_DIR/app/dist/cli.js" "$@"
@@ -135,16 +143,32 @@ exec "$QA_DIR/runtime/node" "$QA_DIR/app/dist/cli.js" "$@"
   chmodSync(join(out, 'qa-recorder.sh'), 0o755);
 }
 
+// Explorer's limit is 260 characters for the whole path. Leave room for the
+// folder people extract into (e.g. C:\\Users\\<name>\\Downloads\\<zip name>\\).
+const longest = longestPath(out, folder);
+console.log(`Longest path in the package: ${longest.length} characters (${longest})`);
+if (longest.length > 170) throw new Error(`Path too long for Windows Explorer: ${longest}`);
+
 // 6. Archive.
 if (!skipArchive) {
   if (isWin) {
     // bsdtar ships with Windows 10+ and writes zip files with -a.
     const tar = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe');
-    run(tar, ['-a', '-c', '-f', `${name}.zip`, name], { cwd: releaseDir });
+    run(tar, ['-a', '-c', '-f', `${name}.zip`, folder], { cwd: releaseDir });
   } else {
-    run('tar', ['-czf', `${name}.tar.gz`, name], { cwd: releaseDir });
+    run('tar', ['-czf', `${name}.tar.gz`, folder], { cwd: releaseDir });
   }
 }
 
 if (!existsSync(join(app, 'dist', 'cli.js'))) throw new Error('Package is missing app/dist/cli.js');
 console.log(`\nDone: ${skipArchive ? out : join(releaseDir, name + (isWin ? '.zip' : '.tar.gz'))}`);
+
+function longestPath(dir, rel) {
+  let best = rel;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const childRel = `${rel}\\${entry.name}`;
+    const candidate = entry.isDirectory() ? longestPath(join(dir, entry.name), childRel) : childRel;
+    if (candidate.length > best.length) best = candidate;
+  }
+  return best;
+}

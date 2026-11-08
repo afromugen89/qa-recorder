@@ -30,7 +30,7 @@ This guide is for testers using the app. For how it works inside, see the [READM
 You don't need Node.js, npm or Git. Ask whoever shares QA Recorder with you for the zip (`QA-Recorder-<version>-win-x64.zip`), or download it from the repository's **Releases** page.
 
 1. Right-click the zip, choose **Properties**, tick **Unblock** if it is there, and click **OK**. This stops Windows asking about every file.
-2. Extract the zip anywhere, for example your Desktop.
+2. Extract the zip, for example to your Desktop. It contains one folder, `QA-Recorder`. If Windows says a path is too long, extract to a short folder such as `C:\QA-Recorder` instead.
 3. Open the folder and double-click **QA Recorder.cmd**.
 4. Type the address of the site to test and press Enter. Leave it empty to start on a blank page.
 
